@@ -2,139 +2,74 @@
 import torch
 from torch import nn
 
+from utils import PositionalEncoding
+from configs import DefaultTrajectory2Policy
 
-class StateActionEncoderDecoder(nn.Module):
 
-    def __init__(self, n_state, n_actions, n_hidden, n_encode, dropout=0.1):
+class Trajectory2Policy(nn.Module):
+
+    def __init__(self, config=DefaultTrajectory2Policy):
         super().__init__()
+        self.config = config
 
-        self.encoder = nn.Sequential(
-            nn.Linear(n_state + n_actions, n_hidden),
-            nn.Dropout(p=dropout),
-            nn.Tanh(),
-            nn.Linear(n_hidden, n_encode)
-        )
+        self.encoder_mouth = nn.Linear(self.config.state_size + self.config.action_size, self.config.h_dim)
+        self.decoder_mouth = nn.Linear(self.config.state_size + self.config.action_size, self.config.h_dim)
 
-        self.decoder = nn.Sequential(
-            nn.Linear(n_encode, n_hidden),
-            nn.Tanh(),
-            nn.Linear(n_hidden, n_hidden),
-            nn.Tanh(),
-            nn.Linear(n_hidden, n_state + n_actions),
-            nn.Tanh()
-        )
+        self.embed2action = nn.Linear(self.config.h_dim, self.config.action_size)
+
+        self.pos_enc = PositionalEncoding(self.config.h_dim, self.config.seq_len)
+
+        enc_layer = nn.TransformerEncoderLayer(self.config.h_dim, self.config.num_encoding_heads, dim_feedforward=self.config.dim_encoding_feedforward, batch_first=True)
+        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=self.config.num_encoding_layers)
+
+        dec_layer = nn.TransformerDecoderLayer(self.config.h_dim, self.config.num_decoding_heads, dim_feedforward=self.config.dim_decoding_feedforward, batch_first=True)
+        self.decoder = nn.TransformerDecoder(dec_layer, num_layers=self.config.num_decoding_layers)
 
 
-    def encode(self, x):
-        enc = self.encoder(x)
-        return nn.functional.normalize(enc, dim=-1)
+    def encodePolicy(self, states, actions):
 
-    def decode(self, x):
-        return 2*self.decoder(x)
+        # x is state-actions tuple
+        l = torch.cat((states, actions), dim=-1)
 
+        l = self.encoder_mouth(l)
 
-    def forward(self, x):
-        return self.decode(self.encode(x))
+        if self.config.temporal_encoding:
+            l = self.pos_enc.forward(l)
 
+        out = self.encoder(l)
 
-# https://d2l.ai/chapter_attention-mechanisms-and-transformers/self-attention-and-positional-encoding.html
-class PositionalEncoding(nn.Module):
-
-    def __init__(self, num_hiddens, max_len):
-        super().__init__()
-
-        self.P = torch.zeros((1, max_len, num_hiddens))
-        X = torch.arange(max_len, dtype=torch.float32).reshape(
-            -1, 1) / torch.pow(10000, torch.arange(
-            0, num_hiddens, 2, dtype=torch.float32) / num_hiddens)
+        out = torch.mean(out, -2).unsqueeze(-2) / self.config.h_dim**0.5
         
-        self.P[:, :, 0::2] = torch.sin(X)
-        self.P[:, :, 1::2] = torch.cos(X)
-
-    def forward(self, X):
-        X = X + self.P[:, :X.shape[1], :].to(X.device)
-        return X
+        return out
 
 
-class TauEncoderDecoder(nn.Module):
+    def decodePolicy(self, policy, states, actions, probs=False):
+        assert states.shape[-2] == actions.shape[-2] and states.shape[-2] <= self.config.seq_len
 
-    def __init__(self, input_dim, h_dim, max_len, num_heads, num_layers, dim_feedforward):
-        super().__init__()
+        actions = torch.roll(actions, 1, -2)        
+        if actions.dim() == 3:
+            actions[:,:,:] = 0
+        else:
+            actions[:,:] = 0
 
-        self.input_dim = input_dim
-        self.h_dim = h_dim
-        self.max_len = max_len
+        l = torch.cat((states, actions), dim=-1)
+        l = self.decoder_mouth(l)
 
-        self.upscaler = nn.Linear(input_dim, h_dim)
-        self.downscaler = nn.Linear(h_dim, input_dim)
+        if self.config.temporal_decoding:
+            l = self.pos_enc.forward(l)
 
-        self.pos_enc = PositionalEncoding(h_dim, self.max_len)
+        state_mask = torch.full([l.shape[-2], l.shape[-2]], float("-inf"), dtype=torch.float).to(policy.device)
+        for i in range(l.shape[-2]):
+            if self.config.remember_past:
+                state_mask[i, :i] = 0
+            else:
+                state_mask[i, i] = 0
 
-        enc_layer = nn.TransformerEncoderLayer(h_dim, num_heads, batch_first=True, dim_feedforward=dim_feedforward)
-        self.encoder = nn.TransformerEncoder(enc_layer, num_layers=num_layers)
+        out = self.decoder(l, policy, tgt_mask=state_mask)
 
-        dec_layer = nn.TransformerDecoderLayer(h_dim, num_heads, batch_first=True, dim_feedforward=dim_feedforward)
-        self.decoder = nn.TransformerDecoder(dec_layer, num_layers=num_layers)
+        policy_actions = self.embed2action(out)
 
-
-    def encode(self, x):
-        x = self.upscaler(x)
-
-        x = x + self.pos_enc.forward(x)
-        enc = self.encoder(x)[:,0,:]
-
-        return nn.functional.normalize(enc, dim=-1)
-
-
-    def decode(self, x, stop_thresh=0.8):
-
-        mem = torch.unsqueeze(x, 1)
-        
-        start_token = torch.zeros_like(mem)
-        start_token[:,:,0] = 1
-
-        end_token = torch.zeros((start_token.shape[-1],), dtype=torch.float32).to(x.device)
-        end_token[-1] = 1
-
-        tgt = start_token
-        out = None
-
-        while True:
-
-            tgt_mask = torch.full((tgt.shape[1], tgt.shape[1]), 1, dtype=torch.bool).to(x.device)
-            for i in range(tgt.shape[1]):
-                tgt_mask[i, i:] = 0
-
-            out = self.decoder(tgt, mem, tgt_mask=tgt_mask)
-            tgt = torch.cat((start_token, out), dim=1)
-
-            if out[:,-1] @ end_token >= 100 or tgt.shape[1] >= self.max_len:
-                break
-
-        out = self.downscaler(out)
-        return torch.nn.functional.normalize(out, dim=-1)
-
-
-    def forward(self, x):
-
-        memory = self.encode(x).unsqueeze(1)
-
-        tgt = self.upscaler(x)
-        start_token = torch.zeros_like(tgt[:,0,:]).unsqueeze(1)
-        start_token[:,:,0] = 1
-        tgt = torch.cat((start_token, tgt), dim=1)
-
-        tgt_mask = torch.full((tgt.shape[1], tgt.shape[1]), 1, dtype=torch.bool).to(x.device)
-        for i in range(tgt.shape[1]):
-            tgt_mask[i, i:] = 0
-
-        out = self.decoder(tgt, memory, tgt_mask=tgt_mask)
-
-        out = self.downscaler(out)
-
-        return torch.nn.functional.normalize(out, dim=-1)
-        
-    
+        return torch.nn.functional.softmax(policy_actions, dim=-1) if probs else policy_actions
 
 
 def main():
