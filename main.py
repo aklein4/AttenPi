@@ -1,152 +1,184 @@
 
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 import gym
-from stable_baselines3 import PPO
-from stable_baselines3.common.env_util import make_vec_env
+# from stable_baselines3 import PPO
+# from stable_baselines3.common.env_util import make_vec_env
 
-from encoding_models import Trajectory2Policy
-from configs import AcrobatTrajectory2Policy
+from encoding_models import LatentPolicy
+from configs import AcrobatLatentPolicy
 
 from tqdm import tqdm
 import numpy as np
+import os
+import random
 
 
-def collect_data(env, num_episodes, episode_length):
+N_SAMPLE_TAUS = 100
+EPISODE_LENGTH = 64
+SAMPLE_TAUS_FILE = "data/sample_taus.pt"
+
+N_EPOCHS = 50
+LR = 1e-3
+BATCH_SIZE = 8
+LATENT_FILE = "data/latent_model.pt"
+
+CHANGE_PROB = 0.25
+
+
+def sampleTau(env, policy, render=False):
+
+    states = []
+    actions = []
+    reward = 0
+
+    obs = torch.tensor(env.reset()[0]).float()
+    
+    while True:
+    
+        states.append(obs)
+
+        action_ind = torch.tensor(policy(obs)).long()
+        actions.append(F.one_hot(action_ind, 3).float().squeeze(0))
+
+        obs, r, done, info, _ = env.step(action_ind.item())
+        obs = torch.tensor(obs).float()
+
+        reward += r
+
+        if render:
+            env.render()
+
+        if done:
+            return states, actions, reward
+
+
+def collect_data(env, policy, num_episodes, episode_length=None):
     
     states = []
     actions = []
-    dones = []
+    rewards = []
 
-    for _ in tqdm(range(num_episodes)):
+    pbar = tqdm(range(num_episodes), desc="Sampling", leave=False)
 
-        s = []
-        a = []
-        d = []
+    while len(rewards) < num_episodes:
+        s, a, r = sampleTau(env, policy)
 
-        action = np.random.randint(0, 2)
+        if episode_length is not None and len(a) < episode_length:
+            continue
 
-        obs = env.reset()[0]
-        while True:
+        if episode_length is not None:
+            states.append(torch.stack(s[-episode_length:]))
+            actions.append(torch.stack(a[-episode_length:]))
+        
+        rewards.append(r)
+        pbar.update(1)
 
-            if np.random.rand() < 0.25:
-                action = np.max(np.random.randint(0, 2), 0)
+    pbar.close()
 
-            s.append(torch.tensor(obs, dtype=torch.float32))
-            a.append(torch.tensor([0, 0, 0], dtype=torch.float32))
-            a[-1][action] = 1
-            d.append(torch.tensor([0], dtype=torch.float32))
-
-            obs, rewards, done, info, _ = env.step(action)
-
-            if done:
-
-                while len(s) < episode_length:
-                    s.append(torch.zeros_like(s[-1]))
-                    a.append(torch.zeros_like(a[-1]))
-                    a[-1][1] = 1
-                    d.append(torch.tensor([1], dtype=torch.float32))
-                
-                break
-
-        seg_start = np.random.randint(0, len(s) - episode_length)
-        s = s[seg_start:seg_start + episode_length]
-        a = a[seg_start:seg_start + episode_length]
-        d = d[seg_start:seg_start + episode_length]
-
-        states.append(torch.stack(s))
-        actions.append(torch.stack(a))
-        dones.append(torch.stack(d))
+    if episode_length is not None:
+        return torch.stack(states), torch.stack(actions), torch.tensor(rewards).float()
     
-    return torch.cat([torch.stack(states), torch.stack(dones)], dim=-1), torch.stack(actions)
+    return torch.tensor(rewards).float()
 
 
-def evalPolicy(env, model, policy, max_steps, render=False):
+class randomPolicy:
+    def __init__(self):
+        self.prev = torch.randint(0, 3, (1,)).item()
 
-    obs = env.reset()[0]
-
-    s = [torch.cat([torch.tensor(obs, dtype=torch.float32), torch.tensor([0], dtype=torch.float32)], dim=-1)]
-    a = [torch.zeros(3, dtype=torch.float32)]
-    probs = model.decodePolicy(policy, torch.stack(s), torch.stack(a), probs=True)[-1].numpy()
-    action = np.random.choice(3, 1, p =  probs/ np.sum(probs))[0]
-
-    s = []
-    a = []
-
-    r = 0
-    seen = 0
-    while True:
-
-        s.append(torch.cat([torch.tensor(obs, dtype=torch.float32), torch.tensor([0], dtype=torch.float32)], dim=-1))
-        a.append(torch.tensor([0, 0, 0], dtype=torch.float32))
-        a[-1][action] = 1
-
-        obs, reward, done, info, _ = env.step(action)
-        r += reward
-        seen += 1
-
-        s = s[:model.config.seq_len]
-        a = a[:model.config.seq_len]
-
-        probs = model.decodePolicy(policy, torch.stack(s), torch.stack(a), probs=True)[-1].numpy()
-        action = np.random.choice(3, 1, p =  probs/ np.sum(probs))[0]
-
-        if render:
-            print(action)
-            env.render()
-
-        if done or seen >= max_steps:
-            return r
+    def __call__(self, s):
+        if random.random() < CHANGE_PROB:
+            self.prev = torch.randint(0, 3, (1,)).item()
+        return self.prev
 
 
 def main():
 
     env = gym.make("Acrobot-v1")
 
-    states, actions = collect_data(env, 1000, 64)
+    pi_random = randomPolicy()
 
-    model = Trajectory2Policy(config=AcrobatTrajectory2Policy)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    model.train()
+    states, actions, rewards = None, None, None
+    if not os.path.exists(SAMPLE_TAUS_FILE):
+        states, actions, rewards = collect_data(env, pi_random, N_SAMPLE_TAUS, EPISODE_LENGTH)
+        torch.save((states, actions, rewards), SAMPLE_TAUS_FILE)
+    else:
+        states, actions, rewards = torch.load(SAMPLE_TAUS_FILE)
 
-    done_mask = states.reshape((-1, 7))[:,-1] != 1
+    model = LatentPolicy(config=AcrobatLatentPolicy)
+    
+    if os.path.exists(LATENT_FILE):
+        model.load_state_dict(torch.load(LATENT_FILE))
+    
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+        model.train()
 
-    target_actions = actions.reshape(-1, actions.shape[-1])[done_mask]
+        shuffler = list(range(N_EPOCHS))
+        random.shuffle(shuffler)
 
-    for epoch in (pbar := tqdm(range(50))):
+        tot_loss = 0
+        tot_acc = 0
+        num_seen = 0
 
-        policy = model.encodePolicy(states, actions)
+        for epoch in (pbar := tqdm(range(N_EPOCHS))):
+            tot_loss = 0
+            tot_acc = 0
+            num_seen = 0
 
-        policy_actions = model.decodePolicy(policy, states, actions)
-        policy_actions = policy_actions.reshape(-1, policy_actions.shape[-1])
-        policy_actions = policy_actions[done_mask]
+            for b in range(0, N_SAMPLE_TAUS, BATCH_SIZE):
 
-        policy_actions = torch.nn.functional.log_softmax(policy_actions, dim=-1)
-            
-        loss = -torch.sum(torch.where(target_actions > 0.5, policy_actions, 0)) / target_actions.shape[0]
+                s, a = states[shuffler[b:b+BATCH_SIZE]], actions[shuffler[b:b+BATCH_SIZE]]
+                if s.shape[0] == 0:
+                    continue
 
-        acc = torch.sum(torch.argmax(policy_actions, dim=-1) == torch.argmax(target_actions, dim=-1)).item() / policy_actions.shape[0]
+                policy = model.encodePolicy(s, a)
+                pred = model.decodePolicy(policy, s).reshape(-1, a.shape[-1])
+                
+                target = a.reshape(-1, a.shape[-1])
+                loss = F.cross_entropy(pred, target)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-        pbar.set_postfix({"Loss": loss.item(), 'acc': acc})
+                num_seen += 1
+                tot_loss += loss.item()
+                tot_acc += torch.sum(torch.argmax(pred, dim=-1) == torch.argmax(target, dim=-1)).item() / pred.shape[0]
 
-    with torch.no_grad():
-        model.eval()
+            pbar.set_postfix({"Loss": tot_loss/num_seen, 'acc': tot_acc/num_seen})
 
-        scores = []
-        best_p = None
-        for i in tqdm(range(states.shape[0])):
-            scores.append(evalPolicy(env, model, model.encodePolicy(states[i], actions[i]), 100))
-            if best_p is None or scores[-1] > scores[best_p]:
-                best_p = i
+        torch.save(model.state_dict(), LATENT_FILE)
 
-        print("Mean:", np.mean(scores), "Max:", np.max(scores))
+    torch.no_grad()
+    model.eval()
 
-        env = gym.make("Acrobot-v1", render_mode="human")
-        evalPolicy(env, model, model.encodePolicy(states[best_p], actions[best_p]), 10000, render=True)
+    reward = []
+    for p in (pbar := tqdm(range(N_SAMPLE_TAUS))):
+        reward.append(sampleTau(env, pi_random)[2])
+        pbar.set_postfix({"Mean": np.mean(reward), 'std': np.std(reward)})
+    
+    print("\nRandom:")
+    print("Mean:", np.mean(reward))
+    print("Std:", np.std(reward))
+    print("Max:", np.max(reward))
+    print("Min:", np.min(reward))
+
+    reward = []
+    for p in (pbar := tqdm(range(N_SAMPLE_TAUS))):
+        model.setInferencePolicy(model.encodePolicy(states[p], actions[p]))
+        reward.append(sampleTau(env, model.sampleAction)[2])
+
+        pbar.set_postfix({"Mean": np.mean(reward), 'std': np.std(reward)})
+
+    print("\nLatent:")
+    print("Mean:", np.mean(reward))
+    print("Std:", np.std(reward))
+    print("Max:", np.max(reward))
+    print("Min:", np.min(reward))
+
 
 if __name__ == '__main__':
     main()

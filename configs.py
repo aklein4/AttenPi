@@ -5,12 +5,12 @@ class Config(dict):
         return self[attr]
 
 
-DefaultTrajectory2Policy = Config(
-    state_size = 4,
+DefaultLatentPolicy = Config(
+    state_size = 6,
     action_size = 2,
 
-    seq_len = 16,
     h_dim = 64,
+    norm_L = True,
 
     num_encoding_heads = 8,
     num_encoding_layers = 4,
@@ -18,30 +18,23 @@ DefaultTrajectory2Policy = Config(
 
     num_decoding_heads = 8,
     num_decoding_layers = 4,
-    dim_decoding_feedforward = 128,
-
-    temporal_encoding = False,
-    temporal_decoding = False,
-    remember_past = False
+    dim_decoding_feedforward = 128
 )
 
 
-AcrobatTrajectory2Policy = Config(
-    state_size = 7,
+AcrobatLatentPolicy = Config(
+    state_size = 6,
     action_size = 3,
 
-    seq_len = 64,
-    h_dim = 16,
+    h_dim = 4,
+    norm_L = True,
 
-    num_encoding_heads = 8,
-    num_encoding_layers = 4,
-    dim_encoding_feedforward = 128,
+    num_encoding_heads = 4,
+    num_encoding_layers = 3,
+    dim_encoding_feedforward = 64,
 
-    num_decoding_heads = 8,
-    num_decoding_layers = 4,
-    dim_decoding_feedforward = 128,
-
-    temporal_encoding = False,
-    temporal_decoding = False,
-    remember_past = False
+    num_decoding_heads = 4,
+    num_decoding_layers = 3,
+    dim_decoding_feedforward = 64,
+    norm_l = True
 )

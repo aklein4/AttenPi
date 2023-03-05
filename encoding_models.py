@@ -1,23 +1,23 @@
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
-from utils import PositionalEncoding
-from configs import DefaultTrajectory2Policy
+from configs import DefaultLatentPolicy
+
+import numpy as np
 
 
-class Trajectory2Policy(nn.Module):
+class LatentPolicy(nn.Module):
 
-    def __init__(self, config=DefaultTrajectory2Policy):
+    def __init__(self, config=DefaultLatentPolicy):
         super().__init__()
         self.config = config
 
         self.encoder_mouth = nn.Linear(self.config.state_size + self.config.action_size, self.config.h_dim)
-        self.decoder_mouth = nn.Linear(self.config.state_size + self.config.action_size, self.config.h_dim)
-
-        self.embed2action = nn.Linear(self.config.h_dim, self.config.action_size)
-
-        self.pos_enc = PositionalEncoding(self.config.h_dim, self.config.seq_len)
+        
+        self.decoder_mouth = nn.Linear(self.config.state_size, self.config.h_dim)
+        self.decoder_tail  = nn.Linear(self.config.h_dim, self.config.action_size)
 
         enc_layer = nn.TransformerEncoderLayer(self.config.h_dim, self.config.num_encoding_heads, dim_feedforward=self.config.dim_encoding_feedforward, batch_first=True)
         self.encoder = nn.TransformerEncoder(enc_layer, num_layers=self.config.num_encoding_layers)
@@ -25,51 +25,59 @@ class Trajectory2Policy(nn.Module):
         dec_layer = nn.TransformerDecoderLayer(self.config.h_dim, self.config.num_decoding_heads, dim_feedforward=self.config.dim_decoding_feedforward, batch_first=True)
         self.decoder = nn.TransformerDecoder(dec_layer, num_layers=self.config.num_decoding_layers)
 
+        self.inference_policy = None
+
 
     def encodePolicy(self, states, actions):
+
 
         # x is state-actions tuple
         l = torch.cat((states, actions), dim=-1)
 
         l = self.encoder_mouth(l)
 
-        if self.config.temporal_encoding:
-            l = self.pos_enc.forward(l)
-
         out = self.encoder(l)
 
-        out = torch.mean(out, -2).unsqueeze(-2) / self.config.h_dim**0.5
+        out = torch.mean(out, -2)
         
-        return out
+        return F.normalize(out, dim=-1) if self.config.norm_l else out
 
 
-    def decodePolicy(self, policy, states, actions, probs=False):
-        assert states.shape[-2] == actions.shape[-2] and states.shape[-2] <= self.config.seq_len
+    def decodePolicy(self, policy, states, probs=False):
+        if states.dim() == 3:
+            assert states.shape[0] == policy.shape[0]
+        elif states.dim() == 2:
+            assert policy.dim() == 1
 
-        actions = torch.roll(actions, 1, -2)        
-        if actions.dim() == 3:
-            actions[:,:,:] = 0
-        else:
-            actions[:,:] = 0
+        policy = policy.unsqueeze(-2)
 
-        l = torch.cat((states, actions), dim=-1)
-        l = self.decoder_mouth(l)
+        h_actions = self.decoder_mouth(states)
 
-        if self.config.temporal_decoding:
-            l = self.pos_enc.forward(l)
+        tgt_mask = torch.full((states.shape[-2], states.shape[-2]), float('-inf'))
+        tgt_mask.fill_diagonal_(0)
 
-        state_mask = torch.full([l.shape[-2], l.shape[-2]], float("-inf"), dtype=torch.float).to(policy.device)
-        for i in range(l.shape[-2]):
-            if self.config.remember_past:
-                state_mask[i, :i] = 0
-            else:
-                state_mask[i, i] = 0
+        out = self.decoder(h_actions, policy, tgt_mask=tgt_mask)
 
-        out = self.decoder(l, policy, tgt_mask=state_mask)
+        pred_actions = self.decoder_tail(out)
 
-        policy_actions = self.embed2action(out)
+        return F.softmax(pred_actions, dim=-1) if probs else pred_actions
 
-        return torch.nn.functional.softmax(policy_actions, dim=-1) if probs else policy_actions
+
+    def setInferencePolicy(self, policy):
+        self.inference_policy = policy
+    
+
+    def sampleAction(self, state):
+        assert self.inference_policy is not None
+
+        probs = self.decodePolicy(self.inference_policy, state.unsqueeze(0), probs=True)[0].detach().cpu().numpy()
+        return np.random.choice(range(self.config.action_size), p=probs)
+
+
+    def greedyAction(self, state):
+        assert self.inference_policy is not None
+
+        return torch.argmax(self.decodePolicy(self.inference_policy, state.unsqueeze(0))[0], dim=-1).item()
 
 
 def main():
