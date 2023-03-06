@@ -5,7 +5,7 @@ class Config(dict):
         return self[attr]
 
 
-DefaultLatentPolicy = Config(
+DefaultLatentTrajectory = Config(
     state_size = 6,
     action_size = 2,
 
@@ -22,19 +22,34 @@ DefaultLatentPolicy = Config(
 )
 
 
-AcrobatLatentPolicy = Config(
-    state_size = 6,
-    action_size = 3,
+LunarLatentTrajectory = Config(
+    state_size = 8,
 
-    h_dim = 4,
-    norm_L = True,
+    h_dim = 32,
+    norm_l = True,
+    max_seq_len = 24,
 
-    num_encoding_heads = 4,
-    num_encoding_layers = 3,
-    dim_encoding_feedforward = 64,
+    num_encoding_heads = 32,
+    num_encoding_layers = 8,
+    dim_encoding_feedforward = 256,
 
-    num_decoding_heads = 4,
-    num_decoding_layers = 3,
-    dim_decoding_feedforward = 64,
-    norm_l = True
+    num_decoding_heads = 32,
+    num_decoding_layers = 8,
+    dim_decoding_feedforward = 256
+)
+
+LunarLatentTrajectoryStable = Config(
+    state_size = 8,
+
+    h_dim = 32,
+    norm_l = True,
+    max_seq_len = 24,
+
+    num_encoding_heads = 32,
+    num_encoding_layers = 8,
+    dim_encoding_feedforward = 256,
+
+    num_decoding_heads = 32,
+    num_decoding_layers = 8,
+    dim_decoding_feedforward = 256
 )
