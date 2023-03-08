@@ -5,10 +5,10 @@ class Config(dict):
         return self[attr]
 
 
-DefaultPathFinder = Config(
+DefaultVariationalTrajectory = Config(
     state_size = 8,
 
-    h_dim = 64,
+    l_dim = 64,
     max_seq_len = 128,
     
     mid_dim = 128,

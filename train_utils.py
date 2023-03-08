@@ -11,8 +11,6 @@ except:
     pass
 
 
-GIVE_Y = True
-
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -200,10 +198,7 @@ def train(model, optimizer, train_data, loss_fn, val_data=None, num_epochs=None,
                     continue
                 x, y = point
 
-                if GIVE_Y:
-                    pred = model.forward(x, y)
-                else:
-                    pred = model.forward(x)
+                pred = model.forward(x)
 
                 loss = loss_fn(pred, y)
 
@@ -287,10 +282,7 @@ def train(model, optimizer, train_data, loss_fn, val_data=None, num_epochs=None,
                                 continue
                             x, y = point
 
-                            if GIVE_Y:
-                                pred = model.forward(x, y)
-                            else:
-                                pred = model.forward(x)
+                            pred = model.forward(x)
                             
                             loss = loss_fn(pred, y)
                             
