@@ -12,20 +12,18 @@ import csv
 import matplotlib.pyplot as plt
 import numpy as np
 
+
 TRAIN_TAUS_FILE = "data/train_taus.pt"
 VAL_TAUS_FILE = "data/val_taus.pt"
 
-DEAD_RECKON = False
+SAVE_FILE = "data/latent_policy.pt"
 
-LOAD_FILE = "data/encoder.pt"
-SAVE_FILE = "data/encoder.pt" if not DEAD_RECKON else "data/reckoner.pt"
+LOG_FILE = "logs/latent_policy.csv"
+GRAFF_FILE = "logs/latent_policy.png"
 
-LOG_FILE = "logs/encoder.csv" if not DEAD_RECKON else "logs/reckoner.csv"
-GRAFF_FILE = "logs/encoder.png" if not DEAD_RECKON else "logs/reckoner.png"
-
-N_EPOCHS = 50
-LR = 1e-7 if DEAD_RECKON else 1e-5
-BATCH_SIZE = 256 if DEAD_RECKON else 64
+N_EPOCHS = 512
+LR = 5e-7
+BATCH_SIZE = 192
 
 MIN_SEQ_LEN = 10
 
@@ -35,27 +33,36 @@ KL_COEF = 1
 class TrajectoryDataset:
     
     def __init__(self, file):
-        self.states, _, _ = torch.load(file)
+        self.states, self.actions, r = torch.load(file)
+        
         self.states = self.states.to(DEVICE)
+        self.actions = self.actions.to(DEVICE)[:,:,:4] # messed up shape
+        
+        assert self.states.shape[0] == self.actions.shape[0]
+        assert self.states.shape[1] == self.actions.shape[1]
         
         self.size = self.states.shape[0]
         
-        self.x = None
+        self.x_states = None
+        self.x_actions = None
         self.shuffler = []
         
         self.reset()
     
     
     def reset(self):
-        self.x = self.states
+        self.x_states = self.states
+        self.x_actions = self.actions
         self.shuffler = list(range(len(self)))
         
     def shuffle(self):
         random.shuffle(self.shuffler)
         
-        seq_len = random.randint(MIN_SEQ_LEN, self.x.shape[1])
-        seq_start = random.randint(0, self.x.shape[1] - seq_len)
-        self.x = self.x[:, seq_start:seq_start+seq_len, :]
+        seq_len = random.randint(MIN_SEQ_LEN, self.actions.shape[1])
+        seq_start = random.randint(0, self.actions.shape[1] - seq_len)
+        
+        self.x_states = self.states[:, seq_start:seq_start+seq_len, :]
+        self.x_actions = self.actions[:, seq_start:seq_start+seq_len]
         
         
     def __len__(self):
@@ -70,12 +77,13 @@ class TrajectoryDataset:
             index, batchsize = getter
 
         # use shuffler as indexes, if batchsize overhangs then batch is truncated
-        seqs = self.x[self.shuffler[index : index+batchsize]]
+        s = self.x_states[self.shuffler[index : index+batchsize]]
+        a = self.x_actions[self.shuffler[index : index+batchsize]]
         
-        if seqs.numel() == 0:
+        if s.numel() == 0:
             return None
         
-        return seqs, seqs
+        return (s, a), a
 
 
 class VariationalLogger(Logger):
@@ -83,18 +91,18 @@ class VariationalLogger(Logger):
     def __init__(self):
         self.epoch = 0
         
-        self.train_losses = []
-        self.val_losses = []
+        self.train_ps = []
+        self.val_ps = []
         
-        self.train_errors = []
-        self.val_errors = []
+        self.train_log_ps = []
+        self.val_log_ps = []
         
         self.train_kls = []
         self.val_kls = []
     
         with open(LOG_FILE, 'w') as csvfile:
             spamwriter = csv.writer(csvfile, delimiter=',', lineterminator='\n')
-            spamwriter.writerow(["epoch", "train_loss", "val_loss", "train_error", "val_error", "train_kl", "val_kl"])
+            spamwriter.writerow(["epoch", "train_p", "val_p", "train_log_p", "val_log_p", "train_kl", "val_kl"])
     
     
     def initialize(self, model):
@@ -107,24 +115,20 @@ class VariationalLogger(Logger):
         train_seq = torch.cat([p[0] for p in train_log[0]])
         train_mu = torch.cat([p[1] for p in train_log[0]])
         train_sig = torch.cat([p[2] for p in train_log[0]])
-        train_loss, train_error, train_kl = ELBOLoss((train_seq, train_mu, train_sig), torch.cat(train_log[1]), split=True)
-        
-        train_loss, train_error, train_kl = train_loss.item(), train_error.item(), train_kl.item()
+        train_p, train_log_p, train_kl = ELBOLoss((train_seq, train_mu, train_sig), torch.cat(train_log[1]), split=True)
 
         # get validation metrics
         val_seq = torch.cat([p[0] for p in val_log[0]])
         val_mu = torch.cat([p[1] for p in val_log[0]])
         val_sig = torch.cat([p[2] for p in val_log[0]])
-        val_loss, val_error, val_kl = ELBOLoss((val_seq, val_mu, val_sig), torch.cat(val_log[1]), split=True)
-        
-        val_loss, val_error, val_kl = val_loss.item(), val_error.item(), val_kl.item()
+        val_p, val_log_p, val_kl = ELBOLoss((val_seq, val_mu, val_sig), torch.cat(val_log[1]), split=True)
         
         # save metrics
-        self.train_losses.append(np.log(train_loss))
-        self.val_losses.append(np.log(val_loss))
+        self.train_ps.append(train_p)
+        self.val_ps.append(val_p)
         
-        self.train_errors.append(np.log(train_error))
-        self.val_errors.append(np.log(val_error))
+        self.train_log_ps.append(train_log_p)
+        self.val_log_ps.append(val_log_p)
         
         self.train_kls.append(np.log(train_kl))
         self.val_kls.append(np.log(val_kl))
@@ -132,27 +136,23 @@ class VariationalLogger(Logger):
         # write to csv
         with open(LOG_FILE, 'a') as csvfile:
             spamwriter = csv.writer(csvfile, delimiter=',', lineterminator='\n')
-            spamwriter.writerow([self.epoch, train_loss, val_loss, train_error, val_error, train_kl, val_kl])
+            spamwriter.writerow([self.epoch, train_p, val_p, train_log_p, val_log_p, train_kl, val_kl])
         
         fig, ax = plt.subplots(3)
         
-        ax[0].plot(self.val_losses)
-        ax[0].plot(self.train_losses)
+        ax[0].plot(self.val_ps)
+        ax[0].plot(self.train_ps)
         ax[0].legend(["val", "train"])
-        ax[0].set_ylabel("Log ELBO Loss")
+        ax[0].set_ylabel("Mean P(a|s))")
         ax[0].set_xlabel("Epoch")
-        ax[0].set_title("ELBO Loss Progress")
+        ax[0].set_title("Correct Action Probability Progress")
         
-        ax[1].plot(self.val_errors)
-        ax[1].plot(self.train_errors)
+        ax[1].plot(self.val_log_ps)
+        ax[1].plot(self.train_log_ps)
         ax[1].legend(["val", "train"])
         ax[1].set_xlabel("Epoch")
-        if DEAD_RECKON:
-            ax[1].set_ylabel("Log Mean L2 Error")
-            ax[1].set_title("L2 Error Progress")
-        else:
-            ax[1].set_ylabel("Log Mean L1 Error")
-            ax[1].set_title("L1 Error Progress")
+        ax[1].set_ylabel("Mean Log P(a|s)")
+        ax[1].set_title("Log Likelihood Progress")
         
         ax[2].plot(self.val_kls)
         ax[2].plot(self.train_kls)
@@ -167,43 +167,40 @@ class VariationalLogger(Logger):
         plt.savefig(GRAFF_FILE)
         plt.close(fig)
         
-        torch.save(self.model.state_dict(), SAVE_FILE)
+        if val_p >= max(self.val_ps):
+            torch.save(self.model.state_dict(), SAVE_FILE)
         
         self.epoch += 1
         
         
 def ELBOLoss(pred, target, split=False):
-    seq, mus, sigmas = pred
+    act_probs, mus, sigmas = pred
     
-    error = F.l1_loss(seq, target)
-    # error -= LOSS_DELTA * F.l1_loss(x_seq[:,1:], target[:,:-1])
-    
-    if DEAD_RECKON:
-        error = F.mse_loss(seq, target)
+    probs = torch.mean(act_probs[target.bool()])
+    log_probs = torch.mean(torch.log(act_probs[target.bool()]))
     
     kl = torch.sum(sigmas**2 + mus**2 - torch.log(sigmas) - 1/2) / sigmas.numel()
     
-    loss = error + KL_COEF*kl
+    loss = -log_probs + KL_COEF*kl
     
     if split:
-        return loss, error, kl
+        return probs.item(), log_probs.item(), kl.item()
+    
     return loss
 
 
 class ELBOMetric:
     def __init__(self):
-        self.title = "[loss, error, kl]"
+        self.title = "[p, log_p, kl]"
     
     def __call__(self, pred, target):
-        loss, error, kl = ELBOLoss(pred, target, split=True)
-        return np.array([np.log(loss.item()), error.item(), np.log(kl.item())], dtype=np.float16)
+        p, log_p, kl = ELBOLoss(pred, target, split=True)
+        return np.array([p, log_p, np.log(kl)], dtype=np.float16)
 
 
 def main():
 
-    model = VariationalTrajectory(dead_reckon=DEAD_RECKON)
-    if DEAD_RECKON:
-        model.load_state_dict(torch.load(LOAD_FILE))
+    model = VariationalTrajectory()
     model = model.to(DEVICE)
     
     train_data = TrajectoryDataset(TRAIN_TAUS_FILE)

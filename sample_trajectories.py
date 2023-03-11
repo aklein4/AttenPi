@@ -33,10 +33,10 @@ def sampleTau(env, policy):
         
             states.append(obs)
             
-            action = np.zeros((env.num_envs, 4))
-            for i in range(env.num_envs):
-                action[i, action_ind[i]] = 1
-            actions.append(action)
+            # action = np.zeros((env.num_envs, 4))
+            # for i in range(env.num_envs):
+            #     action[i, action_ind[i]] = 1
+            actions.append(action_ind)
 
             obs, r, done, info = env.step(action_ind)
             
@@ -46,7 +46,7 @@ def sampleTau(env, policy):
             if np.any(done):
                 break
 
-    return torch.tensor(np.array(states)).permute(1, 0, 2), torch.tensor(np.array(actions)).permute(1, 0, 2), torch.tensor(rewards)
+    return torch.tensor(np.array(states)).permute(1, 0, 2), torch.tensor(np.array(actions)).permute(1, 0), torch.tensor(rewards)
 
 
 class randomPolicy:

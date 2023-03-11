@@ -9,60 +9,60 @@ from model_utils import PositionalEncoding
 
 class VariationalTrajectory(nn.Module):
 
-    def __init__(self, config=DefaultVariationalTrajectory, dead_reckon=True):
+    def __init__(self, config=DefaultVariationalTrajectory):
         super().__init__()
         self.config = config
-        
-        self.dead_reckon = dead_reckon
         
         self.enc_pos = PositionalEncoding(self.config.l_dim*2, self.config.max_seq_len)
         self.dec_pos = PositionalEncoding(self.config.l_dim, self.config.max_seq_len)
         
         self.encoder_head = nn.Sequential(
-            nn.Linear(self.config.state_size, self.config.mid_dim),
-            nn.ELU(),
-            nn.Linear(self.config.mid_dim, self.config.l_dim*2),
+            nn.Linear(self.config.state_size + self.config.action_size + 2, self.config.l_dim*2),
         )
         
         self.decoder_head = nn.Sequential(
-            nn.Linear(self.config.state_size, self.config.mid_dim),
-            nn.ELU(),
-            nn.Linear(self.config.mid_dim, self.config.l_dim),
+            nn.Linear(self.config.state_size, self.config.l_dim),
         )
-        
-        self.decoder_tail = nn.Sequential(
-            nn.Linear(self.config.l_dim, self.config.mid_dim),
-            nn.ELU(),
-            nn.Linear(self.config.mid_dim, self.config.state_size),
-        )
+
+        embeds = torch.zeros((self.config.l_dim, self.config.action_size)).unsqueeze(0).unsqueeze(0)
+        nn.init.xavier_uniform_(embeds)
+        self.action_embeddings = nn.Parameter(embeds, requires_grad=True)
 
         enc_layer = nn.TransformerEncoderLayer(self.config.l_dim*2, self.config.num_heads_encoding, dim_feedforward=self.config.dim_feedforward_encoding, batch_first=True)
         self.encoder = nn.TransformerEncoder(enc_layer, num_layers=self.config.num_layers_encoding)   
         
         decoder_layer = nn.TransformerDecoderLayer(self.config.l_dim, self.config.num_heads, dim_feedforward=self.config.dim_feedforward, batch_first=True)
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=self.config.num_layers)
-
-        self.start_token = torch.tensor([1.0] + [0.0] * (2*self.config.l_dim - 1))
-        self.end_token = torch.tensor([0.0] * (2*self.config.l_dim - 1) + [1.0])
         
 
-    def encode(self, states):
+    def encode(self, x):
+        
+        states, actions = x
+        
+        # encode the states into a latent space
+        
+        assert states.dim() == actions.dim()
         
         batched = True
         if states.dim() == 2:
             batched = False
             states = states.unsqueeze(0)
-
-        l = self.encoder_head(states)
+            actions = actions.unsqueeze(0)
         
-        tok_start = self.start_token.to(states.device)
-        tok_end = self.end_token.to(states.device)
-        if states.dim() == 3:
-            tok_start = torch.stack([self.start_token]*states.shape[0], dim=0).to(states.device)
-            tok_end = torch.stack([self.end_token]*states.shape[0], dim=0).to(states.device)
+        action_part = torch.zeros((actions.shape[0], actions.shape[1], self.config.action_size+2), device=states.device)
+        action_part[:,:,:4][actions] = 1.0
         
-        l = torch.cat((tok_start.unsqueeze(-2), l, tok_end.unsqueeze(-2)), dim=-2)
+        l = torch.cat((states, action_part), dim=-1)
         
+        tok_start = torch.zeros_like(l[:,:1,:])
+        tok_start[:,:,-2] = 1.0
+        
+        tok_end = torch.zeros_like(l[:,:1,:])
+        tok_end[:,:,-1] = 1.0
+        
+        l = torch.cat((tok_start, l, tok_end), dim=-2)
+    
+        l = self.encoder_head(l)
         l = self.enc_pos(l)
 
         out = self.encoder(l)
@@ -80,25 +80,26 @@ class VariationalTrajectory(nn.Module):
 
     def forward(self, x, variance=True):
     
+        x, actions = x
+    
+        # get 
+        batched=True
+        if x.dim() == 2:
+            batched = False
+            x = x.unsqueeze(0)
+            actions = actions.unsqueeze(0)
+    
         # get the encoding of the sequence
-        mus, sigmas = self.encode(x)
+        mus, sigmas = self.encode((x, actions))
         
         # use latent sampling to 
         memory = mus
         if variance:
             memory += sigmas * torch.randn_like(sigmas)
     
-        if self.dead_reckon:
-            return self.decode(memory, x[:, 0], x.shape[-2]), mus, sigmas
-    
-        # store the first element of the sequence
-        raw_start = x[:, 0:1, :]
-    
         # get the encoding of the sequence
         latent_tgt = self.decoder_head(x)
         
-        # remove the last element of the sequence
-        latent_tgt = latent_tgt[:, :-1, :]
         # add positional encoding
         latent_tgt = self.dec_pos(latent_tgt)
         
@@ -110,13 +111,18 @@ class VariationalTrajectory(nn.Module):
         # get the predictions
         latent_out = self.decoder(latent_tgt, memory, tgt_mask=temporal_mask)
 
-        # get the final state predictions
-        raw_out = self.decoder_tail(latent_out)
+        # convert to actions
+        action_logits = latent_out.unsqueeze(-1) * F.normalize(self.action_embeddings, dim=-2)
+        action_logits = torch.sum(action_logits, dim=-2)
         
-        # add the first element to the predictions to make langths match
-        out = torch.cat([raw_start, raw_out], dim=-2)
+        if not batched:
+            action_logits = action_logits.squeeze(0)
+            mus = mus.squeeze(0)
+            sigmas = sigmas.squeeze(0)
 
-        return out, mus, sigmas
+        action_probs = torch.softmax(action_logits, -1)
+
+        return action_probs, mus, sigmas
 
 
     def decode(self, encoding, start, length):

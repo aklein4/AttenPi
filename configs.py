@@ -7,11 +7,10 @@ class Config(dict):
 
 DefaultVariationalTrajectory = Config(
     state_size = 8,
+    action_size = 4,
 
     l_dim = 64,
-    max_seq_len = 128,
-    
-    mid_dim = 128,
+    max_seq_len = 64,
 
     num_heads_encoding = 16,
     dim_feedforward_encoding = 256,
