@@ -13,13 +13,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-TRAIN_TAUS_FILE = "data/train_taus.pt"
-VAL_TAUS_FILE = "data/val_taus.pt"
+TRAIN_TAUS_FILE = "local_data/train_taus.pt"
+VAL_TAUS_FILE = "local_data/val_taus.pt"
 
-SAVE_FILE = "data/latent_policy.pt"
+SAVE_FILE = "local_data/nontemporal_policy.pt"
 
-LOG_FILE = "logs/latent_policy.csv"
-GRAFF_FILE = "logs/latent_policy.png"
+LOG_FILE = "logs/nontemporal_policy.csv"
+GRAFF_FILE = "logs/nontemporal_policy.png"
 
 N_EPOCHS = 512
 LR = 5e-7

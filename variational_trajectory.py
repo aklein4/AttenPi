@@ -54,16 +54,16 @@ class VariationalTrajectory(nn.Module):
         
         l = torch.cat((states, action_part), dim=-1)
         
-        tok_start = torch.zeros_like(l[:,:1,:])
-        tok_start[:,:,-2] = 1.0
+        # tok_start = torch.zeros_like(l[:,:1,:])
+        # tok_start[:,:,-2] = 1.0
         
-        tok_end = torch.zeros_like(l[:,:1,:])
-        tok_end[:,:,-1] = 1.0
+        # tok_end = torch.zeros_like(l[:,:1,:])
+        # tok_end[:,:,-1] = 1.0
         
-        l = torch.cat((tok_start, l, tok_end), dim=-2)
+        # l = torch.cat((tok_start, l, tok_end), dim=-2)
     
         l = self.encoder_head(l)
-        l = self.enc_pos(l)
+        # l = self.enc_pos(l)
 
         out = self.encoder(l)
 
@@ -101,12 +101,12 @@ class VariationalTrajectory(nn.Module):
         latent_tgt = self.decoder_head(x)
         
         # add positional encoding
-        latent_tgt = self.dec_pos(latent_tgt)
+        # latent_tgt = self.dec_pos(latent_tgt)
         
         # get the temporal mask
         temporal_mask = torch.full((latent_tgt.shape[-2], latent_tgt.shape[-2]), float('-inf'), device=latent_tgt.device)
         for i in range(latent_tgt.shape[-2]):
-            temporal_mask[i, :i+1] = 0
+            temporal_mask[i, i] = 0
 
         # get the predictions
         latent_out = self.decoder(latent_tgt, memory, tgt_mask=temporal_mask)

@@ -12,9 +12,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-TAUS_FILE = "data/val_taus.pt"
+TAUS_FILE = "local_data/val_taus.pt"
 
-MODEL_FILE = "data/latent_policy.pt"
+MODEL_FILE = "local_data/nontemporal_policy.pt"
 
 
 def main():
@@ -40,6 +40,7 @@ def main():
         for i in range(a.shape[0]):
             print("{} -> {}".format(torch.argmax(a[i].int()).item(), np.round(a_hat[i].detach().cpu().numpy(), 3)))
 
+        print('\n', round(torch.sum(torch.argmax(a.float(), dim=-1) == torch.argmax(a_hat, dim=-1)).item()/a.shape[0], 3))
         input('\n... ')
 
 
