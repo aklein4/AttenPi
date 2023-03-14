@@ -21,7 +21,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 N_ENVS = 32
 SHUFFLE_RUNS = 8
-MAX_BUF_SIZE = 1024
+MAX_BUF_SIZE = 1024*8
 
 N_SKILLS = DefaultLatentPolicy.num_skills
 SKILL_LEN = 32
@@ -35,6 +35,8 @@ CHECKPOINT = "local_data/checkpoint.pt"
 
 LEARNING_RATE = 1e-4
 BATCH_SIZE = 64
+
+R_NORM = 32
 
 
 class TrainingEnv:
@@ -105,8 +107,9 @@ class TrainingEnv:
                     dones.append(torch.tensor(curr_dones))
 
                     obs, r, this_done, info = self.env.step(a.squeeze().detach().cpu().numpy())
-                    
-                    rewards.append(torch.tensor(r))
+                    r /= R_NORM
+
+                    rewards.append(torch.tensor(r).to(self.device))
                     rewards[-1][curr_dones] = 0
                     prev_rewards.append(rewards[-1])
 
@@ -114,7 +117,7 @@ class TrainingEnv:
 
                 actions = self.model.action_history.to(self.device)
                 states = self.model.state_history.to(self.device)
-                rewards = torch.stack(rewards).to(self.device)
+                rewards = torch.stack(rewards)
                 dones = torch.stack(dones).to(self.device)
 
                 for i in range(self.num_envs):
@@ -127,7 +130,7 @@ class TrainingEnv:
                     break
 
             for tau in range(2, 1+len(prev_rewards)):
-                prev_rewards[-tau] += self.discount * rewards[-tau+1]
+                prev_rewards[-tau] += self.discount * prev_rewards[-tau+1]
 
     
     def evaluate(self, iterations=1):
@@ -151,7 +154,8 @@ class TrainingEnv:
                         a = self.model.policy(torch.tensor(obs).to(self.device))
 
                         obs, r, this_done, info = self.env.step(a.squeeze().detach().cpu().numpy())
-                        
+                        r /= R_NORM
+
                         rewards[np.logical_not(curr_dones)] += r[np.logical_not(curr_dones)]
 
                         curr_dones = np.logical_or(curr_dones, this_done)
@@ -160,7 +164,7 @@ class TrainingEnv:
                         break
                 
                 tot_rewards += np.sum(rewards)
-                tot += 1
+                tot += self.num_envs
             
             return tot_rewards / tot
 
@@ -268,7 +272,7 @@ def main():
     model.to(DEVICE)
 
     env = TrainingEnv(
-        env_name = "LunarLander-v2",
+        env_name = "MountainCar-v0",
         num_envs = N_ENVS,
         model = model,
         skill_len = SKILL_LEN,
@@ -284,6 +288,8 @@ def main():
         log_loc = LOG_LOC,
         graff = GRAFF
     )
+    logger.initialize(model)
+    logger.log(None, None)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 

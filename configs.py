@@ -6,8 +6,8 @@ class Config(dict):
 
 
 DefaultLatentPolicy = Config(
-    state_size = 8,
-    action_size = 4,
+    state_size = 2,
+    action_size = 2,
     num_skills = 4,
 
     h_dim = 64,
