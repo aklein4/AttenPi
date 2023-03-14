@@ -73,7 +73,7 @@ class LatentPolicy(nn.Module):
             self.state_history = torch.cat((self.state_history, states.unsqueeze(1)), dim=-2)
 
         T = self.history.shape[1]//2 + 1
-        pos_encs = self.monitor_pos_embeddings(torch.arange(self.config.max_seq_len, device=states.device)).unsqueeze(0)[:,-T:].flip((-2,))
+        pos_encs = self.monitor_pos_embeddings(torch.arange(self.config.max_seq_len, device=states.device)).unsqueeze(0)[:,:T].flip((-2,))
 
         curr_hist = self.history.clone()
         curr_hist[:,::2] += pos_encs
@@ -111,10 +111,10 @@ class LatentPolicy(nn.Module):
         T = states.shape[1]
 
         # turn the states into embedded sequences
-        states = self.monitor_state_encoder(states) + self.monitor_pos_embeddings(torch.arange(self.config.max_seq_len, device=states.device)).unsqueeze(0)[:,-T:].flip((-2,))
+        states = self.monitor_state_encoder(states) + self.monitor_pos_embeddings(torch.arange(self.config.max_seq_len, device=states.device)).unsqueeze(0)[:,:T].flip((-2,))
 
         # turn the actions into embedded sequences
-        actions = self.monitor_action_embeddings(actions) + self.monitor_pos_embeddings(torch.arange(self.config.max_seq_len, device=states.device)).unsqueeze(0)[:,-T:].flip((-2,))
+        actions = self.monitor_action_embeddings(actions) + self.monitor_pos_embeddings(torch.arange(self.config.max_seq_len, device=states.device)).unsqueeze(0)[:,:T].flip((-2,))
 
         # interleave the states and actions into a history
         hist = torch.cat((states, actions), dim=-2).clone()

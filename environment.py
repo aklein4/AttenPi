@@ -19,30 +19,30 @@ import matplotlib.pyplot as plt
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-N_ENVS = 256
+N_ENVS = 4
 SHUFFLE_RUNS = 4
-MAX_BUF_SIZE = 1024*8
+MAX_BUF_SIZE = 16
 
 N_SKILLS = DefaultLatentPolicy.num_skills
-SKILL_LEN = 16
+SKILL_LEN = 4
 
-EVAL_ITERS = 4
+EVAL_ITERS = 2
 
 LOG_LOC = "logs/log.csv"
 GRAFF = "logs/graff.png"
 
 CHECKPOINT = "local_data/checkpoint.pt"
 
-LEARNING_RATE = 1e-5
-BATCH_SIZE = 128
+LEARNING_RATE = 1e-4
+BATCH_SIZE = 1
 
 R_NORM = 8
 ACC_LAMBDA = 0.0
 
-BASE_DIM = 64
+BASE_DIM = 32
 BASE_LAYERS = 4
 BASE_LR = 1e-4
-BASE_BATCH = 1024
+BASE_BATCH = 4
 
 
 class TrainingEnv:
@@ -117,13 +117,13 @@ class TrainingEnv:
 
                     rewards.append(torch.tensor(r).to(self.device))
                     rewards[-1][curr_dones] = 0
-                    prev_rewards.append(rewards[-1])
-
                     curr_dones = np.logical_or(curr_dones, this_done)
 
                 actions = self.model.action_history.to(self.device)
                 states = self.model.state_history.to(self.device)
                 rewards = torch.stack(rewards)
+                for i in range(rewards.shape[0]):
+                    prev_rewards.append(rewards[i])
                 dones = torch.stack(dones).to(self.device)
 
                 for i in range(self.num_envs):
@@ -163,7 +163,7 @@ class TrainingEnv:
 
                     for t in range(self.skill_len):
 
-                        a = self.model.policy(torch.tensor(obs).to(self.device), stochastic=False)
+                        a = self.model.policy(torch.tensor(obs).to(self.device), stochastic=True)
 
                         obs, r, this_done, info = self.env.step(a.squeeze().detach().cpu().numpy())
                         r /= R_NORM
@@ -216,31 +216,33 @@ class TrainingEnv:
 
 class BaseREINFORCE(nn.Module):
     def __init__(self, state_size, h_dim, n_layers, batch_size, lr, device):
+        super().__init__()
+        
         in_layer = [
             nn.Linear(state_size, h_dim),
             nn.Dropout(0.1),
             nn.ELU(),
         ]
-        mid_layers = [[
+        mid_layers = [nn.Sequential(
             nn.Linear(h_dim, h_dim),
             nn.Dropout(0.1),
             nn.ELU(),
-        ] for _ in range(n_layers)]
+        ) for _ in range(n_layers)]
         out_layer = [
             nn.Linear(h_dim, h_dim),
             nn.ELU(),
             nn.Linear(h_dim, 1)
         ]
         self.baseline = nn.Sequential(
-            **(in_layer + mid_layers + out_layer)
+            *(in_layer + mid_layers + out_layer)
         )
         self.baseline = self.baseline.to(device)
-        self.optimizer = nn.optim.Adam(self.baseline.parameters(), lr=lr)
+        self.optimizer = torch.optim.Adam(self.baseline.parameters(), lr=lr)
 
         self.batch_size = batch_size
 
 
-    def forward(self, x, y):
+    def train_baseline(self, x, y):
         self.train()
         x = x.reshape(-1, x.shape[-1])
         y = y.reshape(-1)
@@ -248,14 +250,14 @@ class BaseREINFORCE(nn.Module):
             x_b, y_b = x[b:b+self.batch_size], y[b:b+self.batch_size]
 
             y_hat = self.baseline(x_b).squeeze(-1)
-            loss = F.mse_loss(y_hat, y_b)
+            loss = F.mse_loss(y_hat.float(), y_b.float())
 
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
     
 
-    def predict(self, x):
+    def predict_baseline(self, x):
         self.eval()
         with torch.no_grad():
             V = self.baseline(x).squeeze(-1)
@@ -270,19 +272,19 @@ class BaseREINFORCE(nn.Module):
 
         correct_mon = ACC_LAMBDA*(torch.argmax(mon, dim=-1) == k).float()
 
-        base = self.predict(s)
-        self.train(s, r)
+        base = self.predict_baseline(s)
+        self.train_baseline(s, r)
         assert base.shape == r.shape
         r = (r-base + correct_mon.unsqueeze(1)).unsqueeze(-1)
 
         log_probs = torch.log_softmax(pi_logits, dim=-1)
         multed = log_probs * r
         masked = multed.view(-1, multed.shape[-1])[a.view(-1)]
-        reinforce_loss = -torch.sum(masked)
+        reinforce_loss = -torch.mean(masked)
 
         monitor_loss = F.cross_entropy(mon, k)
 
-        return (reinforce_loss + monitor_loss)/batch_size
+        return reinforce_loss + monitor_loss
 
 
 def DualLoss(pred, y):
@@ -297,12 +299,12 @@ def DualLoss(pred, y):
 
     log_probs = torch.log_softmax(pi_logits, dim=-1)
     multed = log_probs * r
-    masked = multed.view(-1, multed.shape[-1])[a.view(-1)]
-    reinforce_loss = -torch.sum(masked)
+    masked = multed.view(-1, multed.shape[-1])[a.view(-1)][torch.logical_not(d).view(-1)]
+    reinforce_loss = -torch.mean(masked)
 
     monitor_loss = F.cross_entropy(mon, k)
 
-    return (reinforce_loss + monitor_loss)/batch_size
+    return reinforce_loss + monitor_loss
 
 
 class EnvLogger(Logger):
@@ -364,7 +366,7 @@ def main():
         model = model,
         skill_len = SKILL_LEN,
         shuffle_runs = SHUFFLE_RUNS,
-        discount = 0.95,
+        discount = 1,
         max_buf_size = MAX_BUF_SIZE,
         device = DEVICE
     )
@@ -386,7 +388,7 @@ def main():
         model = model,
         optimizer = optimizer,
         train_data = env,
-        loss_fn = loser.loss,
+        loss_fn = DualLoss,
         logger = logger,
         batch_size = BATCH_SIZE
     )
