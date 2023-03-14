@@ -75,7 +75,7 @@ class TrainingEnv:
 
 
     def shuffle(self):
-        for i in tqdm(range(self.shuffle_runs), desc="Exploring:"):
+        for i in tqdm(range(self.shuffle_runs), desc="Exploring", leave=False):
             self.sample()
         self.data = self.data[-self.max_buf_size:]
 
@@ -138,7 +138,7 @@ class TrainingEnv:
         tot = 0
 
         with torch.no_grad():
-            for it in tqdm(range(iterations), desc="Evaluating:"):
+            for it in tqdm(range(iterations), desc="Evaluating", leave=False):
                 while True:
                     # TODO: skill choosing model
                     skill = torch.randint(0, self.num_skills-1, (self.num_envs,)).to(self.device)
@@ -247,7 +247,7 @@ class EnvLogger(Logger):
             spamwriter.writerow([len(self.avg_rewards)-2, curr_r])
 
         plt.plot(self.avg_rewards)
-        plt.set_title(r"% Average Reward")
+        plt.title(r"% Average Reward")
 
         plt.savefig(self.graff)
         plt.clf()
