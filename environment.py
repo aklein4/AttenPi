@@ -19,9 +19,9 @@ import matplotlib.pyplot as plt
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-N_ENVS = 4
+N_ENVS = 16
 SHUFFLE_RUNS = 4
-MAX_BUF_SIZE = 16
+MAX_BUF_SIZE = 128
 
 N_SKILLS = DefaultLatentPolicy.num_skills
 SKILL_LEN = 4
@@ -33,8 +33,8 @@ GRAFF = "logs/graff.png"
 
 CHECKPOINT = "local_data/checkpoint.pt"
 
-LEARNING_RATE = 1e-4
-BATCH_SIZE = 1
+LEARNING_RATE = 1e-3
+BATCH_SIZE = 4
 
 R_NORM = 8
 ACC_LAMBDA = 0.0
@@ -147,8 +147,6 @@ class TrainingEnv:
         np.random.seed(0)
         random.seed(0)
 
-        obs = self.env.reset()
-        curr_dones = np.zeros((self.num_envs,), dtype=bool)
         rewards = np.zeros((self.num_envs,), dtype=float)
 
         tot_rewards = 0
@@ -156,6 +154,9 @@ class TrainingEnv:
 
         with torch.no_grad():
             for it in tqdm(range(iterations), desc="Evaluating", leave=False):
+                obs = self.env.reset()
+                curr_dones = np.zeros((self.num_envs,), dtype=bool)
+                
                 while True:
                     # TODO: skill choosing model
                     skill = torch.randint(0, self.num_skills-1, (self.num_envs,)).to(self.device)
