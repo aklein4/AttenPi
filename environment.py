@@ -39,6 +39,11 @@ BATCH_SIZE = 128
 R_NORM = 8
 ACC_LAMBDA = 0.0
 
+BASE_DIM = 64
+BASE_LAYERS = 4
+BASE_LR = 1e-4
+BASE_BATCH = 1024
+
 
 class TrainingEnv:
     def __init__(
@@ -207,7 +212,78 @@ class TrainingEnv:
         x = [torch.stack(x[i]) for i in range(len(x))]
 
         return tuple(x), (x[0], x[1], torch.stack(y), x[2], x[3])
+
+
+class BaseREINFORCE(nn.Module):
+    def __init__(self, state_size, h_dim, n_layers, batch_size, lr, device):
+        in_layer = [
+            nn.Linear(state_size, h_dim),
+            nn.Dropout(0.1),
+            nn.ELU(),
+        ]
+        mid_layers = [[
+            nn.Linear(h_dim, h_dim),
+            nn.Dropout(0.1),
+            nn.ELU(),
+        ] for _ in range(n_layers)]
+        out_layer = [
+            nn.Linear(h_dim, h_dim),
+            nn.ELU(),
+            nn.Linear(h_dim, 1)
+        ]
+        self.baseline = nn.Sequential(
+            **(in_layer + mid_layers + out_layer)
+        )
+        self.baseline = self.baseline.to(device)
+        self.optimizer = nn.optim.Adam(self.baseline.parameters(), lr=lr)
+
+        self.batch_size = batch_size
+
+
+    def forward(self, x, y):
+        self.train()
+        x = x.reshape(-1, x.shape[-1])
+        y = y.reshape(-1)
+        for b in range(0, x.shape[0], self.batch_size):
+            x_b, y_b = x[b:b+self.batch_size], y[b:b+self.batch_size]
+
+            y_hat = self.baseline(x_b).squeeze(-1)
+            loss = F.mse_loss(y_hat, y_b)
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
     
+
+    def predict(self, x):
+        self.eval()
+        with torch.no_grad():
+            V = self.baseline(x).squeeze(-1)
+        return V
+
+
+    def loss(self, pred, y):
+        pi_logits, mon = pred
+        s, a, r, k, d = y
+
+        batch_size = pi_logits.shape[0]
+
+        correct_mon = ACC_LAMBDA*(torch.argmax(mon, dim=-1) == k).float()
+
+        base = self.predict(s)
+        self.train(s, r)
+        assert base.shape == r.shape
+        r = (r-base + correct_mon.unsqueeze(1)).unsqueeze(-1)
+
+        log_probs = torch.log_softmax(pi_logits, dim=-1)
+        multed = log_probs * r
+        masked = multed.view(-1, multed.shape[-1])[a.view(-1)]
+        reinforce_loss = -torch.sum(masked)
+
+        monitor_loss = F.cross_entropy(mon, k)
+
+        return (reinforce_loss + monitor_loss)/batch_size
+
 
 def DualLoss(pred, y):
     pi_logits, mon = pred
@@ -304,11 +380,13 @@ def main():
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
+    loser = BaseREINFORCE(model.config.state_size, BASE_DIM, BASE_LAYERS, BATCH_SIZE, BASE_LR, DEVICE)
+
     train(
         model = model,
         optimizer = optimizer,
         train_data = env,
-        loss_fn = DualLoss,
+        loss_fn = loser.loss,
         logger = logger,
         batch_size = BATCH_SIZE
     )
