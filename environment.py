@@ -20,8 +20,8 @@ import matplotlib.pyplot as plt
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 N_ENVS = 32
-SHUFFLE_RUNS = 8
-MAX_BUF_SIZE = 1024*8
+SHUFFLE_RUNS = 16
+MAX_BUF_SIZE = 1024
 
 N_SKILLS = DefaultLatentPolicy.num_skills
 SKILL_LEN = 32
@@ -33,10 +33,10 @@ GRAFF = "logs/graff.png"
 
 CHECKPOINT = "local_data/checkpoint.pt"
 
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 1e-5
 BATCH_SIZE = 64
 
-R_NORM = 32
+R_NORM = 8
 
 
 class TrainingEnv:
@@ -135,6 +135,9 @@ class TrainingEnv:
     
     def evaluate(self, iterations=1):
 
+        np.random.seed(0)
+        random.seed(0)
+
         obs = self.env.reset()
         curr_dones = np.zeros((self.num_envs,), dtype=bool)
         rewards = np.zeros((self.num_envs,), dtype=float)
@@ -166,6 +169,9 @@ class TrainingEnv:
                 tot_rewards += np.sum(rewards)
                 tot += self.num_envs
             
+            seedo = torch.randint(0xFFFF, (1,)).item()
+            np.random.seed(seedo)
+            random.seed(seedo)
             return tot_rewards / tot
 
 
@@ -272,7 +278,7 @@ def main():
     model.to(DEVICE)
 
     env = TrainingEnv(
-        env_name = "MountainCar-v0",
+        env_name = "CartPole-v1",
         num_envs = N_ENVS,
         model = model,
         skill_len = SKILL_LEN,
