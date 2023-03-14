@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 N_ENVS = 32
-SHUFFLE_RUNS = 16
+SHUFFLE_RUNS = 8
 MAX_BUF_SIZE = 1024
 
 N_SKILLS = DefaultLatentPolicy.num_skills
@@ -257,7 +257,7 @@ class EnvLogger(Logger):
 
     def save_checkpoint(self):
         # save the model to a new folder
-        self.model.save_state_dict(CHECKPOINT)
+        torch.save(self.model.state_dict(), CHECKPOINT)
 
 
 def main():
