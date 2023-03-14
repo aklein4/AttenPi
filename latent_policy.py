@@ -46,7 +46,7 @@ class LatentPolicy(nn.Module):
         self.history = None
         self.state_history = None
         self.action_history = None
-        self.t = torch.tensor([0])
+        self.t = torch.tensor([0], device=skills.device)
 
 
     def getSkill(self):
@@ -55,7 +55,8 @@ class LatentPolicy(nn.Module):
 
     def policy(self, states, stochastic=True):
         assert self.curr_skill is not None
-        assert states.dim() == 2 and states.shape[-1] == self.config.state_size
+        assert states.dim() == 2
+        assert states.shape[-1] == self.config.state_size
         assert states.shape[0] == self.n_curr
         assert self.t < self.config.max_seq_len
 
@@ -103,10 +104,10 @@ class LatentPolicy(nn.Module):
         T = states.shape[1]
 
         # turn the states into embedded sequences
-        states = self.monitor_state_encoder(states) + self.monitor_pos_embeddings(torch.arange(T)).unsqueeze(0)
+        states = self.monitor_state_encoder(states) + self.monitor_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
 
         # turn the actions into embedded sequences
-        actions = self.monitor_action_embeddings(actions) + self.monitor_pos_embeddings(torch.arange(T)).unsqueeze(0)
+        actions = self.monitor_action_embeddings(actions) + self.monitor_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
 
         # interleave the states and actions into a history
         hist = torch.cat((states, actions), dim=-2).clone()
@@ -146,8 +147,8 @@ class LatentPolicy(nn.Module):
         T = states.shape[1]
 
         # turn the states into embedded sequences
-        h_states = self.pi_state_encoder(states) + self.pi_pos_embeddings(torch.arange(T)).unsqueeze(0)
-        h_actions = self.pi_action_embeddings(actions) + self.pi_pos_embeddings(torch.arange(T)).unsqueeze(0)
+        h_states = self.pi_state_encoder(states) + self.pi_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
+        h_actions = self.pi_action_embeddings(actions) + self.pi_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
 
         # interleave the states and actions into a history
         hist = torch.cat((h_states, h_actions), dim=-2).clone()

@@ -54,13 +54,13 @@ class TrainingEnv:
 
     def sample(self):
 
-        obs = self.env.reset()[0]
+        obs = self.env.reset()
         curr_dones = np.zeros((self.num_envs,), dtype=bool)
         prev_rewards = []
 
         while True:
             # TODO: skill choosing model
-            skill = torch.randint(0, self.num_skills-1, (self.num_envs,))
+            skill = torch.randint(0, self.num_skills-1, (self.num_envs,)).to(self.device)
             self.model.setSkill(skill)
 
             rewards = []
@@ -72,7 +72,7 @@ class TrainingEnv:
 
                 dones.append(torch.tensor(curr_dones))
 
-                obs, r, this_done, info, _ = self.env.step(a.squeeze().detach().cpu().numpy())
+                obs, r, this_done, info = self.env.step(a.squeeze().detach().cpu().numpy())
                 
                 curr_dones = np.logical_or(curr_dones, this_done)
                 rewards.append(torch.tensor(r))
@@ -149,9 +149,9 @@ def main():
     model = LatentPolicy()
     model.to(DEVICE)
 
-    env = TrainingEnv("LunarLander-v2", num_envs=N_SAMPLE_TAUS, model=model, discount=0.99, skill_len=8)
+    env = TrainingEnv("LunarLander-v2", num_envs=N_SAMPLE_TAUS, model=model, discount=0.99, skill_len=8, max_buf_size=8)
 
-    env.sample()
+    env.shuffle()
 
     x, y = env[(0, 2)]
     
