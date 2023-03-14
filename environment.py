@@ -13,11 +13,13 @@ import numpy as np
 import random
 
 
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 N_SAMPLE_TAUS = 2
 
 
 class TrainingEnv:
-    def __init__(self, env_name, num_envs, model, discount, skill_len, max_buf_size):
+    def __init__(self, env_name, num_envs, model, discount, skill_len, max_buf_size, device=DEVICE):
         self.env = gym.vector.make(env_name, num_envs=num_envs, asynchronous=False)
         self.num_envs = num_envs
 
@@ -25,6 +27,7 @@ class TrainingEnv:
         self.discount = discount
         self.skill_len = skill_len
         self.max_buf_size = max_buf_size
+        self.device = device
 
         # should hold (s, a, r, k, d) tuples
         # temporal length should be skill_len
@@ -65,7 +68,7 @@ class TrainingEnv:
 
             for t in range(self.skill_len):
 
-                a = self.model.policy(torch.tensor(obs))
+                a = self.model.policy(torch.tensor(obs).to(self.device))
 
                 dones.append(torch.tensor(curr_dones))
 
@@ -77,10 +80,10 @@ class TrainingEnv:
                 for tau in range(1, 1+len(prev_rewards)):
                     prev_rewards[-tau][np.logical_not(curr_dones)] += (self.discount ** tau) * rewards[-1][np.logical_not(curr_dones)]
 
-            actions = self.model.action_history
-            states = self.model.state_history
-            rewards = torch.stack(rewards)
-            dones = torch.stack(dones)
+            actions = self.model.action_history.to(self.device)
+            states = self.model.state_history.to(self.device)
+            rewards = torch.stack(rewards).to(self.device)
+            dones = torch.stack(dones).to(self.device)
 
             for i in range(self.num_envs):
                 s, a, r, d = states[i], actions[i], rewards[:,i], dones[:,i]
@@ -144,6 +147,7 @@ def DualLoss(pred, y):
 def main():
 
     model = LatentPolicy()
+    model.to(DEVICE)
 
     env = TrainingEnv("LunarLander-v2", num_envs=N_SAMPLE_TAUS, model=model, discount=0.99, skill_len=8)
 
