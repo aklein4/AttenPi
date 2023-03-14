@@ -72,6 +72,15 @@ class LatentPolicy(nn.Module):
             self.history = torch.cat((self.history, h_states), dim=-2)
             self.state_history = torch.cat((self.state_history, states.unsqueeze(1)), dim=-2)
 
+        T = self.history.shape[0]//2 + 1
+        pos_encs = self.monitor_pos_embeddings(torch.arange(self.config.max_seq_len, device=states.device)).unsqueeze(0)[:,T-1::-1]
+
+        print(self.history.shape, pos_encs.shape)
+
+        curr_hist = self.history.clone()
+        curr_hist[:,::2] += pos_encs
+        curr_hist[:, 1::2] += pos_encs[:,:-1]
+
         # get the policy
         logits = self.pi(self.history, self.curr_skill, tgt_mask=None)[:,-1,:].unsqueeze(-2)
         logits = self.action_head(logits)
@@ -90,7 +99,7 @@ class LatentPolicy(nn.Module):
         else:
             self.action_history = torch.cat((self.action_history, actions), dim=-1)
 
-        hist_actions = self.pi_action_embeddings(actions) + self.pi_pos_embeddings(self.t)
+        hist_actions = self.pi_action_embeddings(actions)
         self.history = torch.cat((self.history, hist_actions), dim=-2)
         self.t += 1
 
@@ -104,10 +113,10 @@ class LatentPolicy(nn.Module):
         T = states.shape[1]
 
         # turn the states into embedded sequences
-        states = self.monitor_state_encoder(states) + self.monitor_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
+        states = self.monitor_state_encoder(states) + self.monitor_pos_embeddings(torch.arange(self.config.max_seq_len, device=states.device)).unsqueeze(0)[:,T-1::-1]
 
         # turn the actions into embedded sequences
-        actions = self.monitor_action_embeddings(actions) + self.monitor_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
+        actions = self.monitor_action_embeddings(actions) + self.monitor_pos_embeddings(torch.arange(self.config.max_seq_len, device=states.device)).unsqueeze(0)[:,T-1::-1]
 
         # interleave the states and actions into a history
         hist = torch.cat((states, actions), dim=-2).clone()

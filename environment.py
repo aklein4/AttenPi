@@ -37,6 +37,7 @@ LEARNING_RATE = 1e-5
 BATCH_SIZE = 64
 
 R_NORM = 8
+ACC_LAMBDA = 0.0
 
 
 class TrainingEnv:
@@ -210,7 +211,7 @@ def DualLoss(pred, y):
 
     batch_size = pi_logits.shape[0]
 
-    correct_mon = (torch.argmax(mon, dim=-1) == k).float()
+    correct_mon = ACC_LAMBDA*(torch.argmax(mon, dim=-1) == k).float()
 
     r = (r + correct_mon.unsqueeze(1)).unsqueeze(-1)
 
