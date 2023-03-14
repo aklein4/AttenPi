@@ -19,14 +19,14 @@ import matplotlib.pyplot as plt
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-N_ENVS = 32
-SHUFFLE_RUNS = 8
+N_ENVS = 32*8
+SHUFFLE_RUNS = 1
 MAX_BUF_SIZE = 1024
 
 N_SKILLS = DefaultLatentPolicy.num_skills
 SKILL_LEN = 32
 
-EVAL_ITERS = 16
+EVAL_ITERS = 1
 
 LOG_LOC = "logs/log.csv"
 GRAFF = "logs/graff.png"
@@ -34,7 +34,7 @@ GRAFF = "logs/graff.png"
 CHECKPOINT = "local_data/checkpoint.pt"
 
 LEARNING_RATE = 1e-4
-BATCH_SIZE = 16
+BATCH_SIZE = 64
 
 
 class TrainingEnv:
