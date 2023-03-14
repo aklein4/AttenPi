@@ -26,15 +26,15 @@ MAX_BUF_SIZE = 16
 N_SKILLS = DefaultLatentPolicy.num_skills
 SKILL_LEN = 4
 
-EVAL_ITERS = 2
+EVAL_ITERS = 8
 
 LOG_LOC = "logs/log.csv"
 GRAFF = "logs/graff.png"
 
 CHECKPOINT = "local_data/checkpoint.pt"
 
-LEARNING_RATE = 1e-4
-BATCH_SIZE = 1
+LEARNING_RATE = 1e-6
+BATCH_SIZE = 2
 
 R_NORM = 8
 ACC_LAMBDA = 0.0
@@ -93,7 +93,7 @@ class TrainingEnv:
 
     def sample(self):
 
-        obs = self.env.reset()
+        obs = self.env.reset()[0]
         curr_dones = np.zeros((self.num_envs,), dtype=bool)
         prev_rewards = []
 
@@ -112,7 +112,7 @@ class TrainingEnv:
 
                     dones.append(torch.tensor(curr_dones))
 
-                    obs, r, this_done, info = self.env.step(a.squeeze().detach().cpu().numpy())
+                    obs, r, this_done, info, _ = self.env.step(a.squeeze().detach().cpu().numpy())
                     r /= R_NORM
 
                     rewards.append(torch.tensor(r).to(self.device))
@@ -142,12 +142,12 @@ class TrainingEnv:
     def evaluate(self, iterations=1):
 
         seedo = random.randrange(0xFFFF)
-        self.env.seed(0)
+        # self.env.seed(0)
         torch.manual_seed(0)
         np.random.seed(0)
         random.seed(0)
 
-        obs = self.env.reset()
+        obs = self.env.reset()[0]
         curr_dones = np.zeros((self.num_envs,), dtype=bool)
         rewards = np.zeros((self.num_envs,), dtype=float)
 
@@ -163,9 +163,9 @@ class TrainingEnv:
 
                     for t in range(self.skill_len):
 
-                        a = self.model.policy(torch.tensor(obs).to(self.device), stochastic=True)
+                        a = self.model.policy(torch.tensor(obs).to(self.device), stochastic=False)
 
-                        obs, r, this_done, info = self.env.step(a.squeeze().detach().cpu().numpy())
+                        obs, r, this_done, info, _ = self.env.step(a.squeeze().detach().cpu().numpy())
                         r /= R_NORM
 
                         rewards[np.logical_not(curr_dones)] += r[np.logical_not(curr_dones)]
@@ -178,7 +178,7 @@ class TrainingEnv:
                 tot_rewards += np.sum(rewards)
                 tot += self.num_envs
             
-            self.env.seed(seedo)
+            # self.env.seed(seedo)
             torch.manual_seed(seedo)
             np.random.seed(seedo)
             random.seed(seedo)
@@ -299,7 +299,8 @@ def DualLoss(pred, y):
 
     log_probs = torch.log_softmax(pi_logits, dim=-1)
     multed = log_probs * r
-    masked = multed.view(-1, multed.shape[-1])[a.view(-1)][torch.logical_not(d).view(-1)]
+    chosen = multed.view(-1, multed.shape[-1])[range(a.view(-1).shape[0]),a.view(-1)]
+    masked = chosen[torch.logical_not(d).view(-1)]
     reinforce_loss = -torch.mean(masked)
 
     monitor_loss = F.cross_entropy(mon, k)
