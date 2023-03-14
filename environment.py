@@ -7,19 +7,48 @@ import gym
 # from stable_baselines3 import PPO
 
 from latent_policy import LatentPolicy
+from train_utils import train, Logger
+from configs import DefaultLatentPolicy
 
 from tqdm import tqdm
 import numpy as np
 import random
+import csv
+import matplotlib.pyplot as plt
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-N_SAMPLE_TAUS = 2
+N_ENVS = 32
+SHUFFLE_RUNS = 16
+MAX_BUF_SIZE = 1024
+
+N_SKILLS = DefaultLatentPolicy.num_skills
+SKILL_LEN = 32
+
+EVAL_ITERS = 16
+
+LOG_LOC = "logs/log.csv"
+GRAFF = "logs/graff.png"
+
+CHECKPOINT = "local_data/checkpoint.pt"
+
+LEARNING_RATE = 1e-4
+BATCH_SIZE = 16
 
 
 class TrainingEnv:
-    def __init__(self, env_name, num_envs, model, discount, skill_len, max_buf_size, device=DEVICE):
+    def __init__(
+            self,
+            env_name,
+            num_envs,
+            model,
+            skill_len,
+            shuffle_runs=1,
+            discount=1,
+            max_buf_size=100000,
+            device=DEVICE
+        ):
         self.env = gym.vector.make(env_name, num_envs=num_envs, asynchronous=False)
         self.num_envs = num_envs
 
@@ -28,6 +57,7 @@ class TrainingEnv:
         self.skill_len = skill_len
         self.max_buf_size = max_buf_size
         self.device = device
+        self.shuffle_runs = shuffle_runs
 
         # should hold (s, a, r, k, d) tuples
         # temporal length should be skill_len
@@ -45,7 +75,8 @@ class TrainingEnv:
 
 
     def shuffle(self):
-        self.sample()
+        for i in tqdm(range(self.shuffle_runs), desc="Exploring:"):
+            self.sample()
         self.data = self.data[-self.max_buf_size:]
 
         self.shuffler = list(range(len(self.data)))
@@ -58,41 +89,78 @@ class TrainingEnv:
         curr_dones = np.zeros((self.num_envs,), dtype=bool)
         prev_rewards = []
 
-        while True:
-            # TODO: skill choosing model
-            skill = torch.randint(0, self.num_skills-1, (self.num_envs,)).to(self.device)
-            self.model.setSkill(skill)
+        with torch.no_grad():
+            while True:
+                # TODO: skill choosing model
+                skill = torch.randint(0, self.num_skills-1, (self.num_envs,)).to(self.device)
+                self.model.setSkill(skill)
 
-            rewards = []
-            dones = []
+                rewards = []
+                dones = []
 
-            for t in range(self.skill_len):
+                for t in range(self.skill_len):
 
-                a = self.model.policy(torch.tensor(obs).to(self.device))
+                    a = self.model.policy(torch.tensor(obs).to(self.device))
 
-                dones.append(torch.tensor(curr_dones))
+                    dones.append(torch.tensor(curr_dones))
 
-                obs, r, this_done, info = self.env.step(a.squeeze().detach().cpu().numpy())
+                    obs, r, this_done, info = self.env.step(a.squeeze().detach().cpu().numpy())
+                    
+                    rewards.append(torch.tensor(r))
+                    prev_rewards.append(rewards[-1])
+                    for tau in range(1, 1+len(prev_rewards)):
+                        prev_rewards[-tau][np.logical_not(curr_dones)] += (self.discount ** tau) * rewards[-1][np.logical_not(curr_dones)]
+
+                    curr_dones = np.logical_or(curr_dones, this_done)
+
+                actions = self.model.action_history.to(self.device)
+                states = self.model.state_history.to(self.device)
+                rewards = torch.stack(rewards).to(self.device)
+                dones = torch.stack(dones).to(self.device)
+
+                for i in range(self.num_envs):
+                    s, a, r, d = states[i], actions[i], rewards[:,i], dones[:,i]
+
+                    if torch.any(torch.logical_not(d)):
+                        self.data.append((s, a, r, skill[i], d))
+
+                if np.all(curr_dones):
+                    break
+
+    
+    def evaluate(self, iterations=1):
+
+        obs = self.env.reset()
+        curr_dones = np.zeros((self.num_envs,), dtype=bool)
+        rewards = np.zeros((self.num_envs,), dtype=float)
+
+        tot_rewards = 0
+        tot = 0
+
+        with torch.no_grad():
+            for it in tqdm(range(iterations), desc="Evaluating:"):
+                while True:
+                    # TODO: skill choosing model
+                    skill = torch.randint(0, self.num_skills-1, (self.num_envs,)).to(self.device)
+                    self.model.setSkill(skill)
+
+                    for t in range(self.skill_len):
+
+                        a = self.model.policy(torch.tensor(obs).to(self.device))
+
+                        obs, r, this_done, info = self.env.step(a.squeeze().detach().cpu().numpy())
+                        
+                        rewards[np.logical_not(curr_dones)] += r[np.logical_not(curr_dones)]
+
+                        curr_dones = np.logical_or(curr_dones, this_done)
+
+                    if np.all(curr_dones):
+                        break
                 
-                curr_dones = np.logical_or(curr_dones, this_done)
-                rewards.append(torch.tensor(r))
-                prev_rewards.append(rewards[-1])
-                for tau in range(1, 1+len(prev_rewards)):
-                    prev_rewards[-tau][np.logical_not(curr_dones)] += (self.discount ** tau) * rewards[-1][np.logical_not(curr_dones)]
-
-            actions = self.model.action_history.to(self.device)
-            states = self.model.state_history.to(self.device)
-            rewards = torch.stack(rewards).to(self.device)
-            dones = torch.stack(dones).to(self.device)
-
-            for i in range(self.num_envs):
-                s, a, r, d = states[i], actions[i], rewards[:,i], dones[:,i]
-
-                if torch.any(torch.logical_not(d)):
-                    self.data.append((s, a, r, skill[i], d))
-
-            if np.all(curr_dones):
-                break
+                tot_rewards += np.sum(rewards)
+                tot += 1
+            
+            return tot_rewards / tot
 
 
     def __getitem__(self, getter):
@@ -144,21 +212,88 @@ def DualLoss(pred, y):
     return (reinforce_loss + monitor_loss)/batch_size
 
 
+class EnvLogger(Logger):
+    def __init__(self, env, eval_iters, log_loc, graff):
+
+        self.env = env
+        self.eval_iters = eval_iters
+
+        # accuracies
+        self.avg_rewards = []
+
+        # save locations
+        self.log_loc = log_loc
+        self.graff = graff
+
+        # create metric file and write header
+        with open(self.log_loc, 'w') as csvfile:
+            spamwriter = csv.writer(csvfile, dialect='excel')
+            spamwriter.writerow(["epoch", "avg_reward"])
+
+
+    def initialize(self, model):
+        # get reference to the model so we can save it
+        self.model = model
+    
+
+    def log(self, train_log, val_log):
+
+        curr_r = self.env.evaluate(self.eval_iters)
+        self.avg_rewards.append(curr_r)
+        
+        # append metrics to csv file
+        with open(self.log_loc, 'a') as csvfile:
+            spamwriter = csv.writer(csvfile, delimiter=',', lineterminator='\n')
+            spamwriter.writerow([len(self.avg_rewards)-2, curr_r])
+
+        plt.plot(self.avg_rewards)
+        plt.set_title(r"% Average Reward")
+
+        plt.savefig(self.graff)
+        plt.clf()
+
+        self.save_checkpoint()
+    
+
+    def save_checkpoint(self):
+        # save the model to a new folder
+        self.model.save_state_dict(CHECKPOINT)
+
+
 def main():
 
     model = LatentPolicy()
     model.to(DEVICE)
 
-    env = TrainingEnv("LunarLander-v2", num_envs=N_SAMPLE_TAUS, model=model, discount=0.99, skill_len=8, max_buf_size=8)
+    env = TrainingEnv(
+        env_name = "LunarLander-v2",
+        num_envs = N_ENVS,
+        model = model,
+        skill_len = SKILL_LEN,
+        shuffle_runs = SHUFFLE_RUNS,
+        discount = 0.95,
+        max_buf_size = MAX_BUF_SIZE,
+        device = DEVICE
+    )
 
-    env.shuffle()
+    logger = EnvLogger(
+        env = env,
+        eval_iters = EVAL_ITERS,
+        log_loc = LOG_LOC,
+        graff = GRAFF
+    )
 
-    x, y = env[(0, 2)]
-    
-    pred = model.forward(x)
-    loss = DualLoss(pred, y)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    print(loss)
+    train(
+        model = model,
+        optimizer = optimizer,
+        train_data = env,
+        loss_fn = DualLoss,
+        logger = logger,
+        batch_size = BATCH_SIZE
+    )
+
 
 if __name__ == '__main__':
     main()
