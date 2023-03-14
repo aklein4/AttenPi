@@ -19,12 +19,12 @@ import matplotlib.pyplot as plt
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-N_ENVS = 512
+N_ENVS = 256
 SHUFFLE_RUNS = 4
 MAX_BUF_SIZE = 1024*8
 
 N_SKILLS = DefaultLatentPolicy.num_skills
-SKILL_LEN = 32
+SKILL_LEN = 16
 
 EVAL_ITERS = 4
 
@@ -33,7 +33,7 @@ GRAFF = "logs/graff.png"
 
 CHECKPOINT = "local_data/checkpoint.pt"
 
-LEARNING_RATE = 0
+LEARNING_RATE = 1e-5
 BATCH_SIZE = 128
 
 R_NORM = 8
@@ -136,6 +136,9 @@ class TrainingEnv:
     
     def evaluate(self, iterations=1):
 
+        seedo = random.randrange(0xFFFF)
+        self.env.seed(0)
+        torch.manual_seed(0)
         np.random.seed(0)
         random.seed(0)
 
@@ -155,7 +158,7 @@ class TrainingEnv:
 
                     for t in range(self.skill_len):
 
-                        a = self.model.policy(torch.tensor(obs).to(self.device))
+                        a = self.model.policy(torch.tensor(obs).to(self.device), stochastic=False)
 
                         obs, r, this_done, info = self.env.step(a.squeeze().detach().cpu().numpy())
                         r /= R_NORM
@@ -170,7 +173,8 @@ class TrainingEnv:
                 tot_rewards += np.sum(rewards)
                 tot += self.num_envs
             
-            seedo = torch.randint(0xFFFF, (1,)).item()
+            self.env.seed(seedo)
+            torch.manual_seed(seedo)
             np.random.seed(seedo)
             random.seed(seedo)
             return tot_rewards / tot

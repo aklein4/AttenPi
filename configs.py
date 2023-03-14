@@ -10,14 +10,14 @@ DefaultLatentPolicy = Config(
     action_size = 2,
     num_skills = 4,
 
-    h_dim = 64,
-    max_seq_len = 64,
+    h_dim = 32,
+    max_seq_len = 16,
 
-    num_heads = 16,
-    dim_feedforward = 256,
+    num_heads = 8,
+    dim_feedforward = 128,
     num_layers = 4,
 
-    num_heads_monitor = 16,
-    dim_feedforward_monitor = 256,
+    num_heads_monitor = 8,
+    dim_feedforward_monitor = 128,
     num_layers_monitor = 4
 )
