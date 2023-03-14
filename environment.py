@@ -107,9 +107,8 @@ class TrainingEnv:
                     obs, r, this_done, info = self.env.step(a.squeeze().detach().cpu().numpy())
                     
                     rewards.append(torch.tensor(r))
+                    rewards[-1][curr_dones] = 0
                     prev_rewards.append(rewards[-1])
-                    for tau in range(1, 1+len(prev_rewards)):
-                        prev_rewards[-tau][np.logical_not(curr_dones)] += (self.discount ** tau) * rewards[-1][np.logical_not(curr_dones)]
 
                     curr_dones = np.logical_or(curr_dones, this_done)
 
@@ -126,6 +125,9 @@ class TrainingEnv:
 
                 if np.all(curr_dones):
                     break
+
+            for tau in range(2, 1+len(prev_rewards)):
+                prev_rewards[-tau] += self.discount * rewards[-tau+1]
 
     
     def evaluate(self, iterations=1):
