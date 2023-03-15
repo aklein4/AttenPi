@@ -57,7 +57,7 @@ DISCOUNT = 1
 # divide rewards by this factor for normalization
 R_NORM = 10
 # balance between policy and skill rewards
-ACC_LAMBDA = 0.5
+ACC_LAMBDA = 0.25
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = False
@@ -82,7 +82,8 @@ class TrainingEnv:
             shuffle_runs=1,
             discount=1,
             max_buf_size=100000,
-            device=DEVICE
+            device=DEVICE,
+            action_handler=(lambda x: x)
         ):
         """Handles the environment and data collection for reinforcement training.
 
@@ -109,6 +110,7 @@ class TrainingEnv:
         self.skill_len = skill_len
         self.shuffle_runs = shuffle_runs
         self.max_buf_size = max_buf_size
+        self.action_handler = action_handler
 
         # device to store everything on
         self.device = device
@@ -176,7 +178,7 @@ class TrainingEnv:
                     dones.append(torch.tensor(curr_dones))
 
                     # take a step in the environment, caching done to temp variable
-                    obs, r, this_done, info, _ = self.env.step(a.squeeze().detach().cpu().numpy())
+                    obs, r, this_done, info, _ = self.env.step(self.action_handler(a).squeeze().detach().cpu().numpy())
                     # normalize reward
                     r /= R_NORM
 
@@ -269,7 +271,7 @@ class TrainingEnv:
                         a = self.model.policy(torch.tensor(obs).to(self.device), stochastic=STOCH_EVAL)
 
                         # take a step in the environment, caching done to temp variable
-                        obs, r, this_done, info, _ = self.env.step(a.squeeze().detach().cpu().numpy())
+                        obs, r, this_done, info, _ = self.env.step(self.action_handler(a).squeeze().detach().cpu().numpy())
                         # normalize reward
                         r /= R_NORM
 
@@ -437,9 +439,9 @@ class BaseREINFORCE(nn.Module):
             _type_: _description_
         """
 
-        # (b, t, a), (b, k), (b, k)
+        # (b, t, a_d, a_s), (b, k), (b, k)
         pi_logits, mon, pred_k = pred
-        # (b, t, s), (b, t), (b, t), (b), (b, t)
+        # (b, t, s), (b, t, s_d), (b, t), (b), (b, t)
         s, a, r, k, d = y
 
         # get 1 where the monitor is correct, -1 where it is wrong
@@ -457,7 +459,7 @@ class BaseREINFORCE(nn.Module):
         # combine the monitor reward with the policy reward
         policy_r = ((1-ACC_LAMBDA)*(r-base) + ACC_LAMBDA*mon_rewards)
         # unsqueeze to broadcast with pi_logits
-        policy_r = policy_r.unsqueeze(-1)
+        policy_r = policy_r.unsqueeze(-1).unsqueeze(-1)
 
         # get log probabilities of each action
         log_probs = torch.log_softmax(pi_logits, dim=-1)
@@ -603,6 +605,15 @@ def main():
         max_buf_size = MAX_BUF_SIZE,
         device = DEVICE
     )
+
+    # env.sample()
+    # s, a, r, k, d = env.data[0]
+    # k = k.unsqueeze(0)
+    # model.setSkill(k)
+    # print(model.forward((s.unsqueeze(0), a.unsqueeze(0), k, d.unsqueeze(0)))[0])
+    # for i in range(s.shape[0]):
+    #     model.policy(s[i:i+1], action_override=a[i:i+1].unsqueeze(1))
+    # exit()
 
     # initialize the logger
     logger = EnvLogger(

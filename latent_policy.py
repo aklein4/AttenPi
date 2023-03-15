@@ -17,8 +17,11 @@ class LatentPolicy(nn.Module):
         self.pi_state_encoder = nn.Linear(self.config.state_size, self.config.h_dim)
         self.monitor_state_encoder = nn.Linear(self.config.state_size, self.config.h_dim)
 
-        self.pi_action_embeddings = nn.Embedding(self.config.action_size, self.config.h_dim)
-        self.monitor_action_embeddings = nn.Embedding(self.config.action_size, self.config.h_dim)
+        self.pi_action_embeddings = nn.Embedding(self.config.action_size*self.config.action_dim, self.config.action_embed_dim)
+        self.pi_action_pooler = nn.Linear(self.config.action_embed_dim*self.config.action_dim, self.config.h_dim)
+
+        self.monitor_action_embeddings = nn.Embedding(self.config.action_size*self.config.action_dim, self.config.action_embed_dim)
+        self.monitor_action_pooler = nn.Linear(self.config.action_embed_dim*self.config.action_dim, self.config.h_dim)
 
         self.pi_pos_embeddings = nn.Embedding(self.config.skill_len, self.config.h_dim)
         self.monitor_pos_embeddings = nn.Embedding(self.config.skill_len, self.config.h_dim)
@@ -29,7 +32,7 @@ class LatentPolicy(nn.Module):
 
         policy_layer = nn.TransformerDecoderLayer(self.config.h_dim, self.config.num_heads, dim_feedforward=self.config.dim_feedforward, batch_first=True)
         self.pi = nn.TransformerDecoder(policy_layer, num_layers=self.config.num_layers)
-        self.action_head = nn.Linear(self.config.h_dim, self.config.action_size)
+        self.action_head = nn.Linear(self.config.h_dim, self.config.action_size*self.config.action_dim)
 
         self.chooser = getFeedForward(self.config.state_size, self.config.h_dim, self.config.num_skills, self.config.num_layers_chooser, self.config.dropout_chooser)
 
@@ -109,6 +112,7 @@ class LatentPolicy(nn.Module):
         # get the policy
         logits = self.pi(curr_hist, self.curr_skill, tgt_mask=temporal_mask)[:,-1,:].unsqueeze(-2)
         logits = self.action_head(logits)
+        logits = logits.view(logits.shape[0], 1, self.config.action_dim, self.config.action_size)
         logits *= self.config.temp
         if action_override is not None:
             print(logits)
@@ -127,9 +131,9 @@ class LatentPolicy(nn.Module):
         if self.action_history is None:
             self.action_history = actions
         else:
-            self.action_history = torch.cat((self.action_history, actions), dim=-1)
+            self.action_history = torch.cat((self.action_history, actions), dim=1)
 
-        hist_actions = self.pi_action_embeddings(actions)
+        hist_actions = self.getActionEmbeddings(actions, self.pi_action_embeddings, self.pi_action_pooler)
         self.history = torch.cat((self.history, hist_actions), dim=-2)
         self.t += 1
 
@@ -138,13 +142,14 @@ class LatentPolicy(nn.Module):
 
     def monitor(self, states, actions, probs=False, pad_mask=None):
         assert states.dim() == 3 and states.shape[-1] == self.config.state_size
-        assert actions.dim() == 2 and actions.shape == states.shape[:2]
+        assert actions.dim() == 3 and actions.shape[:-1] == states.shape[:2]
+        assert actions.shape[-1] == self.config.action_dim
 
         T = states.shape[1]
 
         # turn the states into embedded sequences
         h_states = self.monitor_state_encoder(states)
-        h_actions = self.monitor_action_embeddings(actions)
+        h_actions = self.getActionEmbeddings(actions, self.monitor_action_embeddings, self.monitor_action_pooler)
 
         pos_embs = self.monitor_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
 
@@ -179,14 +184,15 @@ class LatentPolicy(nn.Module):
 
         assert skills.dim() == 1
         assert states.dim() == 3 and states.shape[-1] == self.config.state_size
-        assert actions.shape == states.shape[:2]
-        assert dones.shape == actions.shape
+        assert actions.shape[:-1] == states.shape[:2]
+        assert actions.shape[-1] == self.config.action_dim
+        assert dones.shape == actions.shape[:-1]
 
         T = states.shape[1]
 
         # turn the states into embedded sequences
         h_states = self.pi_state_encoder(states)
-        h_actions = self.pi_action_embeddings(actions)
+        h_actions = self.getActionEmbeddings(actions, self.pi_action_embeddings, self.pi_action_pooler)
 
         pos_embs = self.pi_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
 
@@ -204,7 +210,26 @@ class LatentPolicy(nn.Module):
         # get the policy
         logits = self.pi(hist[:,:-1], latent_skills, tgt_mask=temporal_mask)[:, ::2, :]
         logits = self.action_head(logits)
+        logits = logits.view(*logits.shape[:2], self.config.action_dim, self.config.action_size)
         logits *= self.config.temp
-        assert logits.shape[:2] == actions.shape
+        assert logits.shape[:-1] == actions.shape
 
         return logits, self.monitor(states, actions, probs=False, pad_mask=dones), self.chooseSkill(states[:,0], logits=True)
+
+
+    def getOneHotActions(self, actions):
+        assert actions.shape[-1] == self.config.action_dim
+        return F.one_hot(actions, self.config.action_size).float()
+    
+    def flattenActions(self, actions):
+        return actions.flatten(start_dim=-2, end_dim=-1)
+    
+    def stackActions(self, actions):
+        s1 = actions.shape[:-1]
+        return actions.view(*s1, self.config.action_dim, self.config.action_size)
+    
+    def getActionEmbeddings(self, actions, emb_mondule, pool_module):
+        offset = torch.arange(self.config.action_dim, device=actions.device) * self.config.action_size
+        embs = emb_mondule(actions + offset)
+        vecs = embs.view(*embs.shape[:-2], -1)
+        return pool_module(vecs)

@@ -215,15 +215,23 @@ def train(model, optimizer, train_data, loss_fn, val_data=None, num_epochs=None,
 
                 # detach prediction
                 if isinstance(train_preds[-1], list) or isinstance(train_preds[-1], tuple):
+                    tup = isinstance(train_preds[-1], tuple)
+                    train_preds[-1] = list(train_preds[-1])
                     for k in range(len(train_preds[-1])):
-                        train_preds[-1][k].detach_()
+                        train_preds[-1][k] = train_preds[-1][k].detach()
+                    if tup:
+                        train_preds[-1] = tuple(train_preds[-1])
                 else:
                     train_preds[-1] = train_preds[-1].detach()
 
                 # detach target
                 if isinstance(train_y[-1], list) or isinstance(train_y[-1], tuple):
+                    tup = isinstance(train_y[-1], tuple)
+                    train_y[-1] = list(train_y[-1])
                     for k in range(len(train_y[-1])):
-                        train_y[-1][k].detach_()
+                        train_y[-1][k] = train_y[-1][k].detach()
+                    if tup:
+                        train_y[-1] = tuple(train_y[-1])
                 else:
                     train_y[-1] = train_y[-1].detach()
 
