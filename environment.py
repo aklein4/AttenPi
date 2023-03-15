@@ -475,7 +475,7 @@ class BaseREINFORCE(nn.Module):
         opt_loss = -torch.mean(opt_masked)
 
         # get 1 where the monitor is correct, -1 where it is wrong
-        mon_rewards = 2*(torch.argmax(mon, dim=-1) == k).float() - 1
+        mon_rewards = (torch.argmax(mon, dim=-1) == k).float() - torch.mean((torch.argmax(mon, dim=-1) == k).float())
         # unsqueeze to broadcast with r
         mon_rewards.unsqueeze_(1).unsqueeze_(-1).unsqueeze_(-1)
         assert mon_rewards.dim() == pi_logits.dim()
