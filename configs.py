@@ -44,17 +44,17 @@ WalkerPolicy = Config(
     action_size = 3,
 
     num_skills = 4,
-    skill_len = 4,
+    skill_len = 8,
 
-    h_dim = 64,
-    action_embed_dim = 16,
+    h_dim = 128,
+    action_embed_dim = 32,
 
-    num_heads = 8,
-    dim_feedforward = 128,
+    num_heads = 16,
+    dim_feedforward = 256,
     num_layers = 4,
 
-    num_heads_monitor = 8,
-    dim_feedforward_monitor = 128,
+    num_heads_monitor = 16,
+    dim_feedforward_monitor = 256,
     num_layers_monitor = 4,
 
     num_layers_chooser = 4,

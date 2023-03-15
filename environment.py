@@ -25,13 +25,13 @@ LOCAL_VERSION = DEVICE == torch.device("cpu")
 # number of concurrent environments
 N_ENVS = 16
 # number of passes through all envs to make per epoch
-SHUFFLE_RUNS = 4
+SHUFFLE_RUNS = 1
 # maximum number of (s, a, r, k, d) tuples to store, truncated to newest
-MAX_BUF_SIZE = 256
+MAX_BUF_SIZE = 1024*2
 
 # model config class
-CONFIG = configs.CartpolePolicy
-ENV_NAME = "CartPole-v1"
+CONFIG = configs.WalkerPolicy
+ENV_NAME = "BipedalWalker-v3"
 
 # number of skills in model dict
 N_SKILLS = CONFIG.num_skills
@@ -52,26 +52,28 @@ CHECKPOINT = "local_data/checkpoint.pt"
 # model leaarning rate
 LEARNING_RATE = 1e-3
 # model batch size
-BATCH_SIZE = 16
+BATCH_SIZE = 32
 
 # MDP discount factor
-DISCOUNT = 0.95
+DISCOUNT = 0.98
 # divide rewards by this factor for normalization
-R_NORM = 10
+R_NORM = 100
 # balance between policy and skill rewards
 Kl_LAMBDA = 0.1
+
+LOG_TEMP = 3.0
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = True
 
 # baseline hidden layer size
-BASE_DIM = 16
+BASE_DIM = 64
 # baseline number of hidden layers
-BASE_LAYERS = 2
+BASE_LAYERS = 4
 # baseline learning rate
-BASE_LR = 1e-2
+BASE_LR = 1e-3
 # baseline batch size
-BASE_BATCH = 4
+BASE_BATCH = 8
 
 
 class TrainingEnv:
@@ -464,7 +466,7 @@ class BaseREINFORCE(nn.Module):
         self.train_baseline(s, r)
 
         # combine the monitor reward with the policy reward
-        policy_r = r-base
+        policy_r = r-base.detach()
         # unsqueeze to broadcast with pred_opt
         policy_r = policy_r.unsqueeze(-1).unsqueeze(-1)
 
@@ -475,15 +477,15 @@ class BaseREINFORCE(nn.Module):
         opt_loss = -torch.mean(opt_masked)
 
         # get 1 where the monitor is correct, -1 where it is wrong
-        mon_rewards = (torch.argmax(mon, dim=-1) == k).float() - torch.mean((torch.argmax(mon, dim=-1) == k).float())
+        mon_rewards = torch.log_softmax(mon, -1)[range(k.numel()), k]
         # unsqueeze to broadcast with r
         mon_rewards.unsqueeze_(1).unsqueeze_(-1).unsqueeze_(-1)
         assert mon_rewards.dim() == pi_logits.dim()
 
         # get log probabilities of each action
-        log_probs = torch.log_softmax(pi_logits, dim=-1)
+        log_probs = torch.log_softmax(pi_logits*LOG_TEMP, dim=-1)
         # multiply log probabilities by rewards
-        multed = log_probs * mon_rewards
+        multed = log_probs * mon_rewards.detach()
         # index into vector with only the chosen actions
         chosen = multed.view(-1, multed.shape[-1])[range(a.numel()),a.view(-1)]
         # mask out actions that were taken in a done state
@@ -626,7 +628,8 @@ def main():
         shuffle_runs = SHUFFLE_RUNS,
         discount = DISCOUNT,
         max_buf_size = MAX_BUF_SIZE,
-        device = DEVICE
+        device = DEVICE,
+        action_handler=walkerHandler
     )
 
     # env.sample()
