@@ -12,8 +12,8 @@ DefaultLatentPolicy = Config(
     action_dim = 1,
     action_size = 2,
 
-    num_skills = 4,
-    skill_len = 8,
+    num_skills = 2,
+    skill_len = 4,
 
     h_dim = 16,
     action_embed_dim = 16,
@@ -27,7 +27,10 @@ DefaultLatentPolicy = Config(
     num_layers_monitor = 2,
 
     num_layers_chooser = 2,
-    dropout_chooser = 0.1
+    dropout_chooser = 0.1,
+
+    num_layers_opter = 4,
+    dropout_opter = 0.1
 )
 
 
@@ -55,5 +58,8 @@ WalkerPolicy = Config(
     num_layers_monitor = 4,
 
     num_layers_chooser = 4,
-    dropout_chooser = 0.1
+    dropout_chooser = 0.1,
+
+    num_layers_opter = 4,
+    dropout_opter = 0.1
 )

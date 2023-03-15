@@ -36,6 +36,8 @@ class LatentPolicy(nn.Module):
 
         self.chooser = getFeedForward(self.config.state_size, self.config.h_dim, self.config.num_skills, self.config.num_layers_chooser, self.config.dropout_chooser)
 
+        self.opter = getFeedForward(self.config.state_size, self.config.h_dim, self.config.action_dim*self.config.action_size, self.config.num_layers_opter, self.config.dropout_opter)
+
         self.curr_skill = None
         self.n_curr = None
         self.history = None
@@ -214,7 +216,14 @@ class LatentPolicy(nn.Module):
         logits *= self.config.temp
         assert logits.shape[:-1] == actions.shape
 
-        return logits, self.monitor(states, actions, probs=False, pad_mask=dones), self.chooseSkill(states[:,0], logits=True)
+        return logits, self.monitor(states, actions, probs=False, pad_mask=dones), self.chooseSkill(states[:,0], logits=True), self.optForward(states)
+
+
+    def optForward(self, states):
+        assert states.dim() == 3
+        assert states.shape[-1] == self.config.state_size
+
+        return self.stackActions(self.opter(states))
 
 
     def getOneHotActions(self, actions):
@@ -226,7 +235,7 @@ class LatentPolicy(nn.Module):
     
     def stackActions(self, actions):
         s1 = actions.shape[:-1]
-        return actions.view(*s1, self.config.action_dim, self.config.action_size)
+        return actions.view(*s1, self.config.action_dim, self.config.action_size) * self.config.temp
     
     def getActionEmbeddings(self, actions, emb_mondule, pool_module):
         offset = torch.arange(self.config.action_dim, device=actions.device) * self.config.action_size

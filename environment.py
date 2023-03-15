@@ -23,15 +23,15 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LOCAL_VERSION = DEVICE == torch.device("cpu")
 
 # number of concurrent environments
-N_ENVS = 8
+N_ENVS = 16
 # number of passes through all envs to make per epoch
-SHUFFLE_RUNS = 1
+SHUFFLE_RUNS = 4
 # maximum number of (s, a, r, k, d) tuples to store, truncated to newest
 MAX_BUF_SIZE = 256
 
 # model config class
-CONFIG = configs.WalkerPolicy
-ENV_NAME = "BipedalWalker-v3"
+CONFIG = configs.CartpolePolicy
+ENV_NAME = "CartPole-v1"
 
 # number of skills in model dict
 N_SKILLS = CONFIG.num_skills
@@ -52,26 +52,26 @@ CHECKPOINT = "local_data/checkpoint.pt"
 # model leaarning rate
 LEARNING_RATE = 1e-3
 # model batch size
-BATCH_SIZE = 64
+BATCH_SIZE = 16
 
 # MDP discount factor
 DISCOUNT = 0.95
 # divide rewards by this factor for normalization
-R_NORM = 100
+R_NORM = 10
 # balance between policy and skill rewards
-ACC_LAMBDA = 0.1
+Kl_LAMBDA = 0.1
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = True
 
 # baseline hidden layer size
-BASE_DIM = 64
+BASE_DIM = 16
 # baseline number of hidden layers
-BASE_LAYERS = 4
+BASE_LAYERS = 2
 # baseline learning rate
 BASE_LR = 1e-2
 # baseline batch size
-BASE_BATCH = 16
+BASE_BATCH = 4
 
 
 class TrainingEnv:
@@ -451,15 +451,10 @@ class BaseREINFORCE(nn.Module):
             _type_: _description_
         """
 
-        # (b, t, a_d, a_s), (b, k), (b, k)
-        pi_logits, mon, pred_k = pred
+        # (b, t, a_d, a_s), (b, k), (b, k), (b, t, a_d, a_s)
+        pi_logits, mon, pred_k, pred_opt = pred
         # (b, t, s), (b, t, s_d), (b, t), (b), (b, t)
         s, a, r, k, d = y
-
-        # get 1 where the monitor is correct, -1 where it is wrong
-        mon_rewards = 2*(torch.argmax(mon, dim=-1) == k).float()-1
-        # unsqueeze to broadcast with r
-        mon_rewards.unsqueeze_(1)
 
         # get the baseline prediction, squeeze to match r
         base = self.predict_baseline(s).squeeze(-1)
@@ -469,20 +464,32 @@ class BaseREINFORCE(nn.Module):
         self.train_baseline(s, r)
 
         # combine the monitor reward with the policy reward
-        policy_r = ((1-ACC_LAMBDA)*(r-base) + ACC_LAMBDA*mon_rewards)
-        # unsqueeze to broadcast with pi_logits
+        policy_r = r-base
+        # unsqueeze to broadcast with pred_opt
         policy_r = policy_r.unsqueeze(-1).unsqueeze(-1)
+
+        opt_probs = torch.softmax(pred_opt, dim=-1)
+        opt_multed = opt_probs * policy_r
+        opt_chosen = opt_multed.view(-1, opt_multed.shape[-1])[range(a.numel()),a.view(-1)]
+        opt_masked = opt_chosen[torch.logical_not(d).view(-1).repeat_interleave(a.shape[-1])]
+        opt_loss = -torch.mean(opt_masked)
+
+        # get 1 where the monitor is correct, -1 where it is wrong
+        mon_rewards = 2*(torch.argmax(mon, dim=-1) == k).float() - 1
+        # unsqueeze to broadcast with r
+        mon_rewards.unsqueeze_(1).unsqueeze_(-1).unsqueeze_(-1)
+        assert mon_rewards.dim() == pi_logits.dim()
 
         # get log probabilities of each action
         log_probs = torch.log_softmax(pi_logits, dim=-1)
         # multiply log probabilities by rewards
-        multed = log_probs * policy_r
+        multed = log_probs * mon_rewards
         # index into vector with only the chosen actions
         chosen = multed.view(-1, multed.shape[-1])[range(a.numel()),a.view(-1)]
         # mask out actions that were taken in a done state
         masked = chosen[torch.logical_not(d).view(-1).repeat_interleave(a.shape[-1])]
         # calculate the policy loss according to REINFORCE
-        reinforce_loss = -torch.mean(masked)
+        elbo_loss = -(1-Kl_LAMBDA)*torch.mean(masked) + Kl_LAMBDA*F.kl_div(torch.softmax(pi_logits, dim=-1), torch.softmax(pred_opt, dim=-1).detach(), reduction='batchmean')
 
         # monitor loss is simply cross entropy of pred vs actual
         monitor_loss = F.cross_entropy(mon, k)
@@ -500,7 +507,7 @@ class BaseREINFORCE(nn.Module):
         chooser_loss = -torch.mean(chooser_chosen * chooser_r)
 
         # return superposition of all losses
-        return reinforce_loss + monitor_loss + chooser_loss
+        return opt_loss + elbo_loss + monitor_loss + chooser_loss
 
 
 class EnvLogger(Logger):
