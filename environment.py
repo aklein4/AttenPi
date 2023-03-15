@@ -21,12 +21,12 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 N_ENVS = 16
 SHUFFLE_RUNS = 4
-MAX_BUF_SIZE = 128
+MAX_BUF_SIZE = 256
 
 N_SKILLS = DefaultLatentPolicy.num_skills
-SKILL_LEN = 4
+SKILL_LEN = 8
 
-EVAL_ITERS = 8
+EVAL_ITERS = 1
 
 LOG_LOC = "logs/log.csv"
 GRAFF = "logs/graff.png"
@@ -34,14 +34,16 @@ GRAFF = "logs/graff.png"
 CHECKPOINT = "local_data/checkpoint.pt"
 
 LEARNING_RATE = 1e-3
-BATCH_SIZE = 4
+BATCH_SIZE = 16
 
-R_NORM = 8
-ACC_LAMBDA = 0.0
+DISCOUNT = 1
 
-BASE_DIM = 32
-BASE_LAYERS = 4
-BASE_LR = 1e-4
+R_NORM = 10
+ACC_LAMBDA = 0.5
+
+BASE_DIM = 16
+BASE_LAYERS = 2
+BASE_LR = 1e-2
 BASE_BATCH = 4
 
 
@@ -98,9 +100,10 @@ class TrainingEnv:
         prev_rewards = []
 
         with torch.no_grad():
+            self.model.eval()
             while True:
                 # TODO: skill choosing model
-                skill = torch.randint(0, self.num_skills-1, (self.num_envs,)).to(self.device)
+                skill = torch.randint(0, self.num_skills, (self.num_envs,)).to(self.device)
                 self.model.setSkill(skill)
 
                 rewards = []
@@ -137,36 +140,34 @@ class TrainingEnv:
 
             for tau in range(2, 1+len(prev_rewards)):
                 prev_rewards[-tau] += self.discount * prev_rewards[-tau+1]
-
+        return
     
+
     def evaluate(self, iterations=1):
 
         seedo = random.randrange(0xFFFF)
-        # self.env.seed(0)
         torch.manual_seed(0)
         np.random.seed(0)
         random.seed(0)
-
-        obs = self.env.reset()
-        curr_dones = np.zeros((self.num_envs,), dtype=bool)
-        rewards = np.zeros((self.num_envs,), dtype=float)
 
         tot_rewards = 0
         tot = 0
 
         with torch.no_grad():
+            self.model.eval()
             for it in tqdm(range(iterations), desc="Evaluating", leave=False):
-                obs = self.env.reset()
+                obs = self.env.reset(seed=0)[0]
                 curr_dones = np.zeros((self.num_envs,), dtype=bool)
-                
+                rewards = np.zeros((self.num_envs,), dtype=float)
+
                 while True:
                     # TODO: skill choosing model
-                    skill = torch.randint(0, self.num_skills-1, (self.num_envs,)).to(self.device)
+                    skill = torch.randint(0, self.num_skills, (self.num_envs,)).to(self.device)
                     self.model.setSkill(skill)
 
                     for t in range(self.skill_len):
 
-                        a = self.model.policy(torch.tensor(obs).to(self.device), stochastic=False)
+                        a = self.model.policy(torch.tensor(obs).to(self.device), stochastic=True)
 
                         obs, r, this_done, info, _ = self.env.step(a.squeeze().detach().cpu().numpy())
                         r /= R_NORM
@@ -185,6 +186,7 @@ class TrainingEnv:
             torch.manual_seed(seedo)
             np.random.seed(seedo)
             random.seed(seedo)
+
             return tot_rewards / tot
 
 
@@ -271,18 +273,19 @@ class BaseREINFORCE(nn.Module):
         pi_logits, mon = pred
         s, a, r, k, d = y
 
-        batch_size = pi_logits.shape[0]
-
-        correct_mon = ACC_LAMBDA*(torch.argmax(mon, dim=-1) == k).float()
+        mon_rewards = 2*(torch.argmax(mon, dim=-1) == k).float()-1
+        mon_rewards.unsqueeze_(1)
 
         base = self.predict_baseline(s)
         self.train_baseline(s, r)
         assert base.shape == r.shape
-        r = (r-base + correct_mon.unsqueeze(1)).unsqueeze(-1)
+
+        r = ((1-ACC_LAMBDA)*(r-base) + ACC_LAMBDA*mon_rewards).unsqueeze(-1)
 
         log_probs = torch.log_softmax(pi_logits, dim=-1)
         multed = log_probs * r
-        masked = multed.view(-1, multed.shape[-1])[a.view(-1)]
+        chosen = multed.view(-1, multed.shape[-1])[range(a.view(-1).shape[0]),a.view(-1)]
+        masked = chosen[torch.logical_not(d).view(-1)]
         reinforce_loss = -torch.mean(masked)
 
         monitor_loss = F.cross_entropy(mon, k)
@@ -294,9 +297,7 @@ def DualLoss(pred, y):
     pi_logits, mon = pred
     s, a, r, k, d = y
 
-    batch_size = pi_logits.shape[0]
-
-    correct_mon = ACC_LAMBDA*(torch.argmax(mon, dim=-1) == k).float()
+    correct_mon = ACC_LAMBDA*(2*(torch.argmax(mon, dim=-1) == k).float()-1)
 
     r = (r + correct_mon.unsqueeze(1)).unsqueeze(-1)
 
@@ -319,6 +320,7 @@ class EnvLogger(Logger):
 
         # accuracies
         self.avg_rewards = []
+        self.accs = []
 
         # save locations
         self.log_loc = log_loc
@@ -327,7 +329,7 @@ class EnvLogger(Logger):
         # create metric file and write header
         with open(self.log_loc, 'w') as csvfile:
             spamwriter = csv.writer(csvfile, dialect='excel')
-            spamwriter.writerow(["epoch", "avg_reward"])
+            spamwriter.writerow(["epoch", "avg_reward", "skill_acc"])
 
 
     def initialize(self, model):
@@ -337,19 +339,35 @@ class EnvLogger(Logger):
 
     def log(self, train_log, val_log):
 
+        if train_log is not None:
+            mon = torch.cat([train_log[0][t][1].view(-1, train_log[0][t][1].shape[-1]) for t in range(len(train_log[0]))], dim=0)
+            k = torch.cat([train_log[1][t][3].view(-1) for t in range(len(train_log[1]))], dim=0)
+            acc = (torch.argmax(mon, dim=-1) == k).float().mean()
+        else:
+            acc = 1 / N_SKILLS
+        self.accs.append(acc)
+
         curr_r = self.env.evaluate(self.eval_iters)
         self.avg_rewards.append(curr_r)
         
         # append metrics to csv file
         with open(self.log_loc, 'a') as csvfile:
             spamwriter = csv.writer(csvfile, delimiter=',', lineterminator='\n')
-            spamwriter.writerow([len(self.avg_rewards)-2, curr_r])
+            spamwriter.writerow([len(self.avg_rewards)-2, curr_r, acc])
 
-        plt.plot(self.avg_rewards)
-        plt.title(r"% Average Reward")
+        fig, ax = plt.subplots(2)
 
+        ax[0].plot(self.avg_rewards)
+        ax[0].set_title(r"Average Reward")
+
+        ax[1].plot(self.accs)
+        ax[1].set_title(r"Skill Accuracy")
+
+        fig.set_figwidth(6)
+        fig.set_figheight(8)
+        plt.tight_layout()
         plt.savefig(self.graff)
-        plt.clf()
+        plt.close(fig)
 
         self.save_checkpoint()
     
@@ -370,7 +388,7 @@ def main():
         model = model,
         skill_len = SKILL_LEN,
         shuffle_runs = SHUFFLE_RUNS,
-        discount = 1,
+        discount = DISCOUNT,
         max_buf_size = MAX_BUF_SIZE,
         device = DEVICE
     )
@@ -392,7 +410,7 @@ def main():
         model = model,
         optimizer = optimizer,
         train_data = env,
-        loss_fn = DualLoss,
+        loss_fn = loser.loss,
         logger = logger,
         batch_size = BATCH_SIZE
     )

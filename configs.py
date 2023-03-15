@@ -8,7 +8,8 @@ class Config(dict):
 DefaultLatentPolicy = Config(
     state_size = 4,
     action_size = 2,
-    num_skills = 2,
+    num_skills = 4,
+    action_temp = 0.25,
 
     h_dim = 16,
     max_seq_len = 16,

@@ -53,7 +53,7 @@ class LatentPolicy(nn.Module):
         return self.curr_skill.clone().detach()
 
 
-    def policy(self, states, stochastic=True):
+    def policy(self, states, stochastic=True, action_override=None):
         assert self.curr_skill is not None
         assert states.dim() == 2
         assert states.shape[-1] == self.config.state_size
@@ -61,7 +61,7 @@ class LatentPolicy(nn.Module):
         assert self.t < self.config.max_seq_len
 
         # turn the states into embedded sequences
-        h_states = self.pi_state_encoder(states) + self.pi_pos_embeddings(self.t)
+        h_states = self.pi_state_encoder(states)
         h_states = h_states.unsqueeze(1)
 
         # add states to history
@@ -73,23 +73,33 @@ class LatentPolicy(nn.Module):
             self.state_history = torch.cat((self.state_history, states.unsqueeze(1)), dim=-2)
 
         T = self.history.shape[1]//2 + 1
-        pos_encs = self.monitor_pos_embeddings(torch.arange(self.config.max_seq_len, device=states.device)).unsqueeze(0)[:,:T].flip((-2,))
+        pos_encs = self.pi_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
 
         curr_hist = self.history.clone()
         curr_hist[:,::2] += pos_encs
         curr_hist[:, 1::2] += pos_encs[:,:-1]
 
+        seq_len = curr_hist.shape[1]
+        temporal_mask = torch.full((seq_len, seq_len), float('-inf'), device=states.device)
+        for i in range(seq_len):
+            temporal_mask[i, :i+1] = 0
+
         # get the policy
-        logits = self.pi(self.history, self.curr_skill, tgt_mask=None)[:,-1,:].unsqueeze(-2)
+        logits = self.pi(curr_hist, self.curr_skill, tgt_mask=temporal_mask)[:,-1,:].unsqueeze(-2)
         logits = self.action_head(logits)
+        logits *= self.config.action_temp
+        if action_override is not None:
+            print(logits)
 
         # get the action
         actions = None
         if stochastic:
-            dist = torch.distributions.Categorical(logits=logits)
+            dist = torch.distributions.Categorical(probs=torch.softmax(logits, dim=-1))
             actions = dist.sample()
         else:
             actions = torch.argmax(logits, dim=-1)
+        if action_override is not None:
+            actions = action_override
 
         # increment the history
         if self.action_history is None:
@@ -111,15 +121,14 @@ class LatentPolicy(nn.Module):
         T = states.shape[1]
 
         # turn the states into embedded sequences
-        states = self.monitor_state_encoder(states) + self.monitor_pos_embeddings(torch.arange(self.config.max_seq_len, device=states.device)).unsqueeze(0)[:,:T].flip((-2,))
+        h_states = self.monitor_state_encoder(states)
+        h_actions = self.monitor_action_embeddings(actions)
 
-        # turn the actions into embedded sequences
-        actions = self.monitor_action_embeddings(actions) + self.monitor_pos_embeddings(torch.arange(self.config.max_seq_len, device=states.device)).unsqueeze(0)[:,:T].flip((-2,))
+        pos_embs = self.monitor_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
 
         # interleave the states and actions into a history
-        hist = torch.cat((states, actions), dim=-2).clone()
-        hist[:, 0::2, :] = states
-        hist[:, 1::2, :] = actions
+        hist = torch.repeat_interleave(h_states + pos_embs, 2, dim=-2)
+        hist[:, 1::2] = h_actions + pos_embs
 
         if pad_mask is not None:
             pad_mask = torch.repeat_interleave(pad_mask, 2, dim=-1)
@@ -154,24 +163,26 @@ class LatentPolicy(nn.Module):
         T = states.shape[1]
 
         # turn the states into embedded sequences
-        h_states = self.pi_state_encoder(states) + self.pi_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
-        h_actions = self.pi_action_embeddings(actions) + self.pi_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
+        h_states = self.pi_state_encoder(states)
+        h_actions = self.pi_action_embeddings(actions)
+
+        pos_embs = self.pi_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
 
         # interleave the states and actions into a history
-        hist = torch.cat((h_states, h_actions), dim=-2).clone()
-        hist[:, 0::2, :] = h_states
-        hist[:, 1::2, :] = h_actions
+        hist = torch.repeat_interleave(h_states + pos_embs, 2, dim=-2)
+        hist[:, 1::2] = h_actions + pos_embs
 
-        temporal_mask = torch.full((T*2, T*2), float('-inf'), device=states.device)
-        for i in range(T*2):
-            temporal_mask[i, :i+1] = 0
+        temporal_mask = torch.full((T*2-1, T*2-1), True, device=states.device)
+        for i in range(T*2-1):
+            temporal_mask[i, :i+1] = False 
 
         # get the encoding of the sequence
         latent_skills = self.skill_embeddings(skills).unsqueeze(-2)
 
         # get the policy
-        logits = self.pi(hist, latent_skills, tgt_mask=temporal_mask)[:, ::2, :]
+        logits = self.pi(hist[:,:-1], latent_skills, tgt_mask=temporal_mask)[:, ::2, :]
         logits = self.action_head(logits)
+        logits *= self.config.action_temp
         assert logits.shape[:2] == actions.shape
 
         return logits, self.monitor(states, actions, probs=False, pad_mask=dones)
