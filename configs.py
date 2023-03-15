@@ -40,8 +40,8 @@ WalkerPolicy = Config(
     action_dim = 4,
     action_size = 3,
 
-    num_skills = 8,
-    skill_len = 8,
+    num_skills = 4,
+    skill_len = 4,
 
     h_dim = 64,
     action_embed_dim = 16,

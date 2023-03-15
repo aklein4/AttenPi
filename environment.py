@@ -23,7 +23,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LOCAL_VERSION = DEVICE == torch.device("cpu")
 
 # number of concurrent environments
-N_ENVS = 16
+N_ENVS = 8
 # number of passes through all envs to make per epoch
 SHUFFLE_RUNS = 1
 # maximum number of (s, a, r, k, d) tuples to store, truncated to newest
@@ -52,26 +52,26 @@ CHECKPOINT = "local_data/checkpoint.pt"
 # model leaarning rate
 LEARNING_RATE = 1e-3
 # model batch size
-BATCH_SIZE = 16
+BATCH_SIZE = 64
 
 # MDP discount factor
 DISCOUNT = 0.95
 # divide rewards by this factor for normalization
-R_NORM = 10
+R_NORM = 100
 # balance between policy and skill rewards
-ACC_LAMBDA = 0.25
+ACC_LAMBDA = 0.1
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = True
 
 # baseline hidden layer size
-BASE_DIM = 16
+BASE_DIM = 64
 # baseline number of hidden layers
-BASE_LAYERS = 2
+BASE_LAYERS = 4
 # baseline learning rate
 BASE_LR = 1e-2
 # baseline batch size
-BASE_BATCH = 4
+BASE_BATCH = 16
 
 
 class TrainingEnv:
@@ -558,7 +558,7 @@ class EnvLogger(Logger):
                 for t in range(len(train_log[1]))
             ], dim=0)
             # calculate prediction accuracy
-            acc = (torch.argmax(mon, dim=-1) == k).float().mean()
+            acc = (torch.argmax(mon, dim=-1) == k).float().mean().item()
 
         # during init call, we just use an average
         else:
