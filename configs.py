@@ -32,3 +32,28 @@ DefaultLatentPolicy = Config(
 
 
 CartpolePolicy = DefaultLatentPolicy
+
+WalkerPolicy = Config(
+    temp = 0.25,
+    
+    state_size = 24,
+    action_dim = 4,
+    action_size = 3,
+
+    num_skills = 8,
+    skill_len = 8,
+
+    h_dim = 64,
+    action_embed_dim = 16,
+
+    num_heads = 8,
+    dim_feedforward = 128,
+    num_layers = 4,
+
+    num_heads_monitor = 8,
+    dim_feedforward_monitor = 128,
+    num_layers_monitor = 4,
+
+    num_layers_chooser = 4,
+    dropout_chooser = 0.1
+)

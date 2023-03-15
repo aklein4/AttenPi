@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 
 # device to use for model
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+LOCAL_VERSION = DEVICE == torch.device("cpu")
 
 # number of concurrent environments
 N_ENVS = 16
@@ -29,7 +30,8 @@ SHUFFLE_RUNS = 1
 MAX_BUF_SIZE = 256
 
 # model config class
-CONFIG = configs.CartpolePolicy
+CONFIG = configs.WalkerPolicy
+ENV_NAME = "BipedalWalker-v3"
 
 # number of skills in model dict
 N_SKILLS = CONFIG.num_skills
@@ -53,14 +55,14 @@ LEARNING_RATE = 1e-3
 BATCH_SIZE = 16
 
 # MDP discount factor
-DISCOUNT = 1
+DISCOUNT = 0.95
 # divide rewards by this factor for normalization
 R_NORM = 10
 # balance between policy and skill rewards
 ACC_LAMBDA = 0.25
 
 # whether to perform evaluation stochastically
-STOCH_EVAL = False
+STOCH_EVAL = True
 
 # baseline hidden layer size
 BASE_DIM = 16
@@ -147,7 +149,9 @@ class TrainingEnv:
         """
 
         # reset the environment and get the initial state
-        obs = self.env.reset()[0]
+        obs = self.env.reset()
+        if LOCAL_VERSION:
+            obs = obs[0]
         # keep track of which envs are done
         curr_dones = np.zeros((self.num_envs,), dtype=bool)
         # hold previous rewards as references for return calculation
@@ -178,7 +182,10 @@ class TrainingEnv:
                     dones.append(torch.tensor(curr_dones))
 
                     # take a step in the environment, caching done to temp variable
-                    obs, r, this_done, info, _ = self.env.step(self.action_handler(a).squeeze().detach().cpu().numpy())
+                    out = self.env.step(self.action_handler(a).squeeze().detach().cpu().numpy())
+                    if LOCAL_VERSION:
+                        out = out[:-1]
+                    obs, r, this_done, info = out
                     # normalize reward
                     r /= R_NORM
 
@@ -252,7 +259,9 @@ class TrainingEnv:
             for it in tqdm(range(iterations), desc="Evaluating", leave=False):
 
                 # reset the environment and get the initial state
-                obs = self.env.reset(seed=0)[0]
+                obs = self.env.reset(seed=0)
+                if LOCAL_VERSION:
+                    obs = obs[0]
                 # keep track of which envs are done
                 curr_dones = np.zeros((self.num_envs,), dtype=bool)
                 # hold rewards (each new reward is added)
@@ -271,7 +280,10 @@ class TrainingEnv:
                         a = self.model.policy(torch.tensor(obs).to(self.device), stochastic=STOCH_EVAL)
 
                         # take a step in the environment, caching done to temp variable
-                        obs, r, this_done, info, _ = self.env.step(self.action_handler(a).squeeze().detach().cpu().numpy())
+                        out = self.env.step(self.action_handler(a).squeeze().detach().cpu().numpy())
+                        if LOCAL_VERSION:
+                            out = out[:-1]
+                        obs, r, this_done, info = out
                         # normalize reward
                         r /= R_NORM
 
@@ -468,7 +480,7 @@ class BaseREINFORCE(nn.Module):
         # index into vector with only the chosen actions
         chosen = multed.view(-1, multed.shape[-1])[range(a.numel()),a.view(-1)]
         # mask out actions that were taken in a done state
-        masked = chosen[torch.logical_not(d).view(-1)]
+        masked = chosen[torch.logical_not(d).view(-1).repeat_interleave(a.shape[-1])]
         # calculate the policy loss according to REINFORCE
         reinforce_loss = -torch.mean(masked)
 
@@ -588,6 +600,10 @@ class EnvLogger(Logger):
         torch.save(self.model.state_dict(), CHECKPOINT)
 
 
+def walkerHandler(a):
+    return (a-1).float()
+
+
 def main():
 
     # initialize the model that we will train
@@ -596,7 +612,7 @@ def main():
 
     # initialize our training environment
     env = TrainingEnv(
-        env_name = "CartPole-v1",
+        env_name = ENV_NAME,
         num_envs = N_ENVS,
         model = model,
         skill_len = SKILL_LEN,
