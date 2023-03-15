@@ -6,13 +6,15 @@ class Config(dict):
 
 
 DefaultLatentPolicy = Config(
+    temp = 0.25,
+    
     state_size = 4,
     action_size = 2,
+
     num_skills = 4,
-    action_temp = 0.25,
+    skill_len = 8,
 
     h_dim = 16,
-    max_seq_len = 16,
 
     num_heads = 2,
     dim_feedforward = 32,
@@ -20,5 +22,32 @@ DefaultLatentPolicy = Config(
 
     num_heads_monitor = 2,
     dim_feedforward_monitor = 32,
-    num_layers_monitor = 2
+    num_layers_monitor = 2,
+
+    num_layers_chooser = 2,
+    dropout_chooser = 0.1
+)
+
+
+CartpolePolicy = Config(
+    temp = 0.25,
+    
+    state_size = 4,
+    action_size = 2,
+
+    num_skills = 4,
+    skill_len = 8,
+
+    h_dim = 16,
+
+    num_heads = 2,
+    dim_feedforward = 32,
+    num_layers = 2,
+
+    num_heads_monitor = 2,
+    dim_feedforward_monitor = 32,
+    num_layers_monitor = 2,
+
+    num_layers_chooser = 2,
+    dropout_chooser = 0.1
 )

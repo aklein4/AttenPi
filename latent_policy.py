@@ -3,12 +3,12 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from configs import DefaultLatentPolicy
+from model_utils import getFeedForward
 
 
 class LatentPolicy(nn.Module):
 
-    def __init__(self, config=DefaultLatentPolicy):
+    def __init__(self, config):
         super().__init__()
         self.config = config
         
@@ -20,8 +20,8 @@ class LatentPolicy(nn.Module):
         self.pi_action_embeddings = nn.Embedding(self.config.action_size, self.config.h_dim)
         self.monitor_action_embeddings = nn.Embedding(self.config.action_size, self.config.h_dim)
 
-        self.pi_pos_embeddings = nn.Embedding(self.config.max_seq_len, self.config.h_dim)
-        self.monitor_pos_embeddings = nn.Embedding(self.config.max_seq_len, self.config.h_dim)
+        self.pi_pos_embeddings = nn.Embedding(self.config.skill_len, self.config.h_dim)
+        self.monitor_pos_embeddings = nn.Embedding(self.config.skill_len, self.config.h_dim)
 
         monitor_layer = nn.TransformerEncoderLayer(self.config.h_dim, self.config.num_heads_monitor, dim_feedforward=self.config.dim_feedforward_monitor, batch_first=True)
         self.skill_monitor = nn.TransformerEncoder(monitor_layer, num_layers=self.config.num_layers_monitor)
@@ -30,6 +30,8 @@ class LatentPolicy(nn.Module):
         policy_layer = nn.TransformerDecoderLayer(self.config.h_dim, self.config.num_heads, dim_feedforward=self.config.dim_feedforward, batch_first=True)
         self.pi = nn.TransformerDecoder(policy_layer, num_layers=self.config.num_layers)
         self.action_head = nn.Linear(self.config.h_dim, self.config.action_size)
+
+        self.chooser = getFeedForward(self.config.state_size, self.config.h_dim, self.config.num_skills, self.config.num_layers_chooser, self.config.dropout_chooser)
 
         self.curr_skill = None
         self.n_curr = None
@@ -53,12 +55,32 @@ class LatentPolicy(nn.Module):
         return self.curr_skill.clone().detach()
 
 
+    def chooseSkill(self, states, stochastic=True, logits=False):
+        assert states.dim() == 2 and states.shape[-1] == self.config.state_size
+
+        out = self.chooser(states)*self.config.temp
+
+        if logits:
+            return out
+        
+        if stochastic:
+            dist = torch.distributions.Categorical(probs=torch.softmax(out, dim=-1))
+            return dist.sample()
+        return torch.argmax(out, dim=-1)
+    
+
+    def setChooseSkill(self, states, stochastic=True):
+        skill = self.chooseSkill(states, stochastic=stochastic)
+        self.setSkill(skill)
+        return skill
+
+
     def policy(self, states, stochastic=True, action_override=None):
         assert self.curr_skill is not None
         assert states.dim() == 2
         assert states.shape[-1] == self.config.state_size
         assert states.shape[0] == self.n_curr
-        assert self.t < self.config.max_seq_len
+        assert self.t < self.config.skill_len
 
         # turn the states into embedded sequences
         h_states = self.pi_state_encoder(states)
@@ -87,7 +109,7 @@ class LatentPolicy(nn.Module):
         # get the policy
         logits = self.pi(curr_hist, self.curr_skill, tgt_mask=temporal_mask)[:,-1,:].unsqueeze(-2)
         logits = self.action_head(logits)
-        logits *= self.config.action_temp
+        logits *= self.config.temp
         if action_override is not None:
             print(logits)
 
@@ -182,7 +204,7 @@ class LatentPolicy(nn.Module):
         # get the policy
         logits = self.pi(hist[:,:-1], latent_skills, tgt_mask=temporal_mask)[:, ::2, :]
         logits = self.action_head(logits)
-        logits *= self.config.action_temp
+        logits *= self.config.temp
         assert logits.shape[:2] == actions.shape
 
-        return logits, self.monitor(states, actions, probs=False, pad_mask=dones)
+        return logits, self.monitor(states, actions, probs=False, pad_mask=dones), self.chooseSkill(states[:,0], logits=True)

@@ -23,3 +23,28 @@ class PositionalEncoding(nn.Module):
         else:
             X = X + self.P[0, :X.shape[0], :].to(X.device)
         return X
+    
+
+def getFeedForward(in_dim, h_dim, out_dim, n_layers, dropout):
+    in_layer = [
+            nn.Linear(in_dim, h_dim),
+            nn.Dropout(dropout),
+            nn.ELU(),
+        ]
+    
+    mid_layers = [nn.Sequential(
+        nn.Linear(h_dim, h_dim),
+        nn.Dropout(dropout),
+        nn.ELU(),
+    ) for _ in range(n_layers)]
+
+    out_layer = [
+        nn.Linear(h_dim, h_dim),
+        nn.ELU(dropout),
+        nn.Linear(h_dim, out_dim)
+    ]
+
+    network = nn.Sequential(
+        *(in_layer + mid_layers + out_layer)
+    )
+    return network

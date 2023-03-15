@@ -8,7 +8,8 @@ import gym
 
 from latent_policy import LatentPolicy
 from train_utils import train, Logger
-from configs import DefaultLatentPolicy
+from model_utils import getFeedForward
+import configs
 
 from tqdm import tqdm
 import numpy as np
@@ -20,11 +21,13 @@ import matplotlib.pyplot as plt
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 N_ENVS = 16
-SHUFFLE_RUNS = 4
+SHUFFLE_RUNS = 1
 MAX_BUF_SIZE = 256
 
-N_SKILLS = DefaultLatentPolicy.num_skills
-SKILL_LEN = 8
+CONFIG = configs.CartpolePolicy
+
+N_SKILLS = CONFIG.num_skills
+SKILL_LEN = CONFIG.skill_len
 
 EVAL_ITERS = 1
 
@@ -103,8 +106,7 @@ class TrainingEnv:
             self.model.eval()
             while True:
                 # TODO: skill choosing model
-                skill = torch.randint(0, self.num_skills, (self.num_envs,)).to(self.device)
-                self.model.setSkill(skill)
+                skill = self.model.setChooseSkill(torch.tensor(obs).to(self.device))
 
                 rewards = []
                 dones = []
@@ -162,8 +164,7 @@ class TrainingEnv:
 
                 while True:
                     # TODO: skill choosing model
-                    skill = torch.randint(0, self.num_skills, (self.num_envs,)).to(self.device)
-                    self.model.setSkill(skill)
+                    self.model.setChooseSkill(torch.tensor(obs).to(self.device))
 
                     for t in range(self.skill_len):
 
@@ -223,25 +224,9 @@ class BaseREINFORCE(nn.Module):
     def __init__(self, state_size, h_dim, n_layers, batch_size, lr, device):
         super().__init__()
         
-        in_layer = [
-            nn.Linear(state_size, h_dim),
-            nn.Dropout(0.1),
-            nn.ELU(),
-        ]
-        mid_layers = [nn.Sequential(
-            nn.Linear(h_dim, h_dim),
-            nn.Dropout(0.1),
-            nn.ELU(),
-        ) for _ in range(n_layers)]
-        out_layer = [
-            nn.Linear(h_dim, h_dim),
-            nn.ELU(),
-            nn.Linear(h_dim, 1)
-        ]
-        self.baseline = nn.Sequential(
-            *(in_layer + mid_layers + out_layer)
-        )
+        self.baseline = getFeedForward(state_size, h_dim, 1, n_layers, dropout=0.1)
         self.baseline = self.baseline.to(device)
+
         self.optimizer = torch.optim.Adam(self.baseline.parameters(), lr=lr)
 
         self.batch_size = batch_size
@@ -270,8 +255,9 @@ class BaseREINFORCE(nn.Module):
 
 
     def loss(self, pred, y):
-        pi_logits, mon = pred
+        pi_logits, mon, pred_k = pred
         s, a, r, k, d = y
+        og_r = r
 
         mon_rewards = 2*(torch.argmax(mon, dim=-1) == k).float()-1
         mon_rewards.unsqueeze_(1)
@@ -290,7 +276,13 @@ class BaseREINFORCE(nn.Module):
 
         monitor_loss = F.cross_entropy(mon, k)
 
-        return reinforce_loss + monitor_loss
+        chooser_r = (og_r-base)[:,0]
+        chooser_probs = torch.log_softmax(pred_k, dim=-1)
+        chooser_chosen = chooser_probs[range(k.shape[0]),k]
+        assert chooser_chosen.shape == chooser_r.shape
+        chooser_loss = -torch.mean(chooser_chosen * chooser_r)
+
+        return reinforce_loss + monitor_loss + chooser_loss
 
 
 def DualLoss(pred, y):
@@ -379,7 +371,7 @@ class EnvLogger(Logger):
 
 def main():
 
-    model = LatentPolicy()
+    model = LatentPolicy(CONFIG)
     model.to(DEVICE)
 
     env = TrainingEnv(
