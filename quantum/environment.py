@@ -180,8 +180,6 @@ class TrainingEnv:
                     # this item in the sequence is done if the _previous state_ was done
                     dones.append(torch.tensor(curr_dones))
 
-                    print(self.action_handler(a).squeeze().detach().cpu().numpy())
-                    exit()
                     # take a step in the environment, caching done to temp variable
                     out = self.env.step(self.action_handler(a).squeeze().detach().cpu().numpy())
                     if LOCAL_VERSION:
