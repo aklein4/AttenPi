@@ -42,19 +42,19 @@ WalkerPolicy = Config(
     action_size = 3,
 
     num_pi = 4,
-    skill_len = 4,
-    diff_pi = True,
+    skill_len = 8,
+    diff_pi = False,
 
     delta_dim = 64,
-    delta_layers = 4,
+    delta_layers = 2,
     delta_dropout = 0.1,
 
     pi_dim = 64,
-    pi_layers = 4,
+    pi_layers = 2,
     pi_dropout = 0.1,
 
     latent_dim = 8,
     encoder_dim = 64,
-    encoder_layers = 4,
+    encoder_layers = 2,
     encoder_dropout = 0.1
 )

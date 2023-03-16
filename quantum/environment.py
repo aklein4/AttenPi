@@ -23,11 +23,9 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LOCAL_VERSION = DEVICE == torch.device("cpu")
 
 # number of concurrent environments
-N_ENVS = 16
+N_ENVS = 4
 # number of passes through all envs to make per epoch
-SHUFFLE_RUNS = 1
-# maximum number of (s, a, r, d) tuples to store, truncated to newest
-MAX_BUF_SIZE = 256
+SHUFFLE_RUNS = 8
 
 # model config class
 CONFIG = configs.WalkerPolicy
@@ -38,6 +36,7 @@ SKILL_LEN = CONFIG.skill_len
 
 # number of evaluation iterations (over all envs)
 EVAL_ITERS = 1
+MAX_BUF_SIZE = 0
 
 # csv log output location
 LOG_LOC = "logs/log.csv"
@@ -48,17 +47,17 @@ GRAFF = "logs/graff.png"
 CHECKPOINT = "local_data/checkpoint.pt"
 
 # model leaarning rate
-LEARNING_RATE = 5e-4
+LEARNING_RATE = 1e-4
 # model batch size
-BATCH_SIZE = 8
+BATCH_SIZE = 16
 
 # MDP discount factor
-DISCOUNT = 0.95
+DISCOUNT = 0.9
 # divide rewards by this factor for normalization
 R_NORM = 100
 
-LAMBDA_SKILL = 0.25
-LAMBDA_PI = 0.1
+LAMBDA_SKILL = 0.0
+LAMBDA_PI = 1
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = True
@@ -68,11 +67,11 @@ BASELINE = True
 # baseline hidden layer size
 BASE_DIM = 64
 # baseline number of hidden layers
-BASE_LAYERS = 4
+BASE_LAYERS = 2
 # baseline learning rate
-BASE_LR = 1e-2
+BASE_LR = 1e-3
 # baseline batch size
-BASE_BATCH = 2
+BASE_BATCH = 4
 
 
 class TrainingEnv:
@@ -181,6 +180,8 @@ class TrainingEnv:
                     # this item in the sequence is done if the _previous state_ was done
                     dones.append(torch.tensor(curr_dones))
 
+                    print(self.action_handler(a).squeeze().detach().cpu().numpy())
+                    exit()
                     # take a step in the environment, caching done to temp variable
                     out = self.env.step(self.action_handler(a).squeeze().detach().cpu().numpy())
                     if LOCAL_VERSION:
@@ -665,8 +666,8 @@ def main():
         shuffle_runs = SHUFFLE_RUNS,
         discount = DISCOUNT,
         max_buf_size = MAX_BUF_SIZE,
-        device = DEVICE
-        #action_handler=walkerHandler
+        device = DEVICE,
+        action_handler=walkerHandler
     )
 
     # initialize the logger
@@ -700,3 +701,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
