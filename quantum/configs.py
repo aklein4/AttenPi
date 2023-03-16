@@ -34,29 +34,31 @@ DefaultQuantumPolicy = Config(
 CartpolePolicy = DefaultQuantumPolicy
 
 
-WalkerPolicy = Config(
+CheetahPolicy = Config(
     temp = 1,
 
-    state_size = 24,
-    action_dim = 4,
-    action_size = 3,
+    state_size = 17,
+    action_dim = 6,
+    action_size = 5,
 
     num_pi = 4,
     skill_len = 8,
-    diff_pi = False,
+    diff_pi = True,
 
-    delta_dim = 64,
+    delta_dim = 32,
     delta_layers = 2,
     delta_dropout = 0.1,
 
-    pi_dim = 64,
+    pi_dim = 32,
     pi_layers = 2,
     pi_dropout = 0.1,
 
-    latent_dim = 8,
-    encoder_dim = 64,
+    latent_dim = 4,
+    encoder_dim = 23,
     encoder_layers = 2,
-    encoder_dropout = 0.1
+    encoder_dropout = 0.1,
+
+    batch_keep = 4
 )
 
 KangarooPolicy = Config(

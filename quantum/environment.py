@@ -23,20 +23,20 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LOCAL_VERSION = DEVICE == torch.device("cpu")
 
 # number of concurrent environments
-N_ENVS = 2
+N_ENVS = 1
 # number of passes through all envs to make per epoch
 SHUFFLE_RUNS = 8
 
 # model config class
-CONFIG = configs.KangarooPolicy
-ENV_NAME = "Kangaroo-v4"
+CONFIG = configs.CheetahPolicy
+ENV_NAME = "HalfCheetah-v4"
 
 # length of each skill sequence
 SKILL_LEN = CONFIG.skill_len
 
 # number of evaluation iterations (over all envs)
 EVAL_ITERS = 1
-MAX_BUF_SIZE = 512
+MAX_BUF_SIZE = 1024
 
 # csv log output location
 LOG_LOC = "logs/log.csv"
@@ -52,12 +52,12 @@ LEARNING_RATE = 1e-4
 BATCH_SIZE = 32
 
 # MDP discount factor
-DISCOUNT = 0.99
+DISCOUNT = 0.95
 # divide rewards by this factor for normalization
 R_NORM = 100
 
-LAMBDA_SKILL = 0.01
-LAMBDA_PI = 0.01
+LAMBDA_SKILL = 0.1
+LAMBDA_PI = 0.1
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = True
@@ -65,13 +65,13 @@ STOCH_EVAL = True
 BASELINE = True
 
 # baseline hidden layer size
-BASE_DIM = 256
+BASE_DIM = 32
 # baseline number of hidden layers
 BASE_LAYERS = 2
 # baseline learning rate
-BASE_LR = 1e-4
+BASE_LR = 1e-3
 # baseline batch size
-BASE_BATCH = 8
+BASE_BATCH = BATCH_SIZE//4
 
 
 class TrainingEnv:
@@ -101,7 +101,7 @@ class TrainingEnv:
         """
 
         # create environment
-        self.env = gym.vector.make(env_name, num_envs=num_envs, asynchronous=False, obs_type="ram")
+        self.env = gym.vector.make(env_name, num_envs=num_envs, asynchronous=False)
         self.num_envs = num_envs
 
         # store model reference
@@ -168,7 +168,7 @@ class TrainingEnv:
                     obs = obs.astype(np.float32) / 255
 
                 # get the chosen skill and set it in the model
-                skill = self.model.setChooseSkill(torch.tensor(obs).to(self.device))
+                skill = self.model.setChooseSkill(torch.tensor(obs).to(self.device).float())
 
                 # get the skill's reward sequence
                 rewards = []
@@ -182,13 +182,13 @@ class TrainingEnv:
                         obs = obs.astype(np.float32) / 255
 
                     # sample an action using the current state
-                    a = self.model.policy(torch.tensor(obs).to(self.device))
+                    a = self.model.policy(torch.tensor(obs).to(self.device).float())
 
                     # this item in the sequence is done if the _previous state_ was done
                     dones.append(torch.tensor(curr_dones))
 
                     # take a step in the environment, caching done to temp variable
-                    out = self.env.step(self.action_handler(a).squeeze().detach().cpu().numpy())
+                    out = self.env.step(self.action_handler(a).detach().cpu().numpy())
                     if LOCAL_VERSION:
                         out = out[:-1]
                     obs, r, this_done, info = out
@@ -276,12 +276,11 @@ class TrainingEnv:
                 # run until all envs are done
                 while True:
 
-
                     if obs.dtype == np.uint8:
                         obs = obs.astype(np.float32) / 255
         
                     # get the chosen skill and set it in the model
-                    self.model.setChooseSkill(torch.tensor(obs).to(self.device))
+                    self.model.setChooseSkill(torch.tensor(obs).to(self.device).float())
 
                     # iterate through the skill sequence
                     for t in range(self.skill_len):
@@ -290,10 +289,10 @@ class TrainingEnv:
                             obs = obs.astype(np.float32) / 255
 
                         # sample an action using the current state, greedy if not STOCH_EVAL
-                        a = self.model.policy(torch.tensor(obs).to(self.device), stochastic=STOCH_EVAL)
+                        a = self.model.policy(torch.tensor(obs).to(self.device).float(), stochastic=STOCH_EVAL)
 
                         # take a step in the environment, caching done to temp variable
-                        out = self.env.step(self.action_handler(a).squeeze().detach().cpu().numpy())
+                        out = self.env.step(self.action_handler(a).detach().cpu().numpy())
                         if LOCAL_VERSION:
                             out = out[:-1]
                         obs, r, this_done, info = out
@@ -659,8 +658,8 @@ class EnvLogger(Logger):
         torch.save(self.model.state_dict(), CHECKPOINT)
 
 
-def walkerHandler(a):
-    return (a-1).float()
+def CheetahHandler(a):
+    return (a-3).float() / 2.0
 
 def KangarooHandler(a):
     return a.int()
@@ -681,7 +680,7 @@ def main():
         discount = DISCOUNT,
         max_buf_size = MAX_BUF_SIZE,
         device = DEVICE,
-        action_handler=KangarooHandler
+        action_handler=CheetahHandler
     )
 
     # initialize the logger
