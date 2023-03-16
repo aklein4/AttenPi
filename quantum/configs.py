@@ -43,7 +43,7 @@ CheetahPolicy = Config(
 
     num_pi = 4,
     skill_len = 8,
-    diff_pi = True,
+    diff_pi = False,
 
     delta_dim = 32,
     delta_layers = 2,

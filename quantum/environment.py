@@ -20,12 +20,12 @@ import matplotlib.pyplot as plt
 
 # device to use for model
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-LOCAL_VERSION = DEVICE == torch.device("cpu")
+LOCAL_VERSION = True
 
 # number of concurrent environments
-N_ENVS = 1
+N_ENVS = 4
 # number of passes through all envs to make per epoch
-SHUFFLE_RUNS = 8
+SHUFFLE_RUNS = 2
 
 # model config class
 CONFIG = configs.CheetahPolicy
@@ -36,7 +36,9 @@ SKILL_LEN = CONFIG.skill_len
 
 # number of evaluation iterations (over all envs)
 EVAL_ITERS = 1
-MAX_BUF_SIZE = 1024
+MAX_BUF_SIZE = 1025
+
+MAX_EPISODE = 1000
 
 # csv log output location
 LOG_LOC = "logs/log.csv"
@@ -47,20 +49,20 @@ GRAFF = "logs/graff.png"
 CHECKPOINT = "local_data/checkpoint.pt"
 
 # model leaarning rate
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 3e-4
 # model batch size
 BATCH_SIZE = 32
 
 # MDP discount factor
-DISCOUNT = 0.95
+DISCOUNT = 0.98
 # divide rewards by this factor for normalization
 R_NORM = 100
 
-LAMBDA_SKILL = 0.1
-LAMBDA_PI = 0.1
+LAMBDA_SKILL = 0.5
+LAMBDA_PI = 1
 
 # whether to perform evaluation stochastically
-STOCH_EVAL = True
+STOCH_EVAL = False
 
 BASELINE = True
 
@@ -135,8 +137,11 @@ class TrainingEnv:
         if len(self.data) > 0:
             self.data = random.choices(self.data, k=min(len(self.data), self.max_buf_size))
         # sample shuffler_runs times
-        for i in tqdm(range(self.shuffle_runs), desc="Exploring", leave=False):
+        self.pbar = tqdm(range(self.shuffle_runs), desc="Exploring", leave=False)
+        for _ in self.pbar:
             self.sample()
+        self.pbar.close()
+        self.pbar = None
 
         # shuffle shuffler
         self.shuffler = list(range(len(self.data)))
@@ -160,7 +165,8 @@ class TrainingEnv:
         # torch setup
         with torch.no_grad():
             self.model.eval()
-
+            time = -1
+        
             # run until all envs are done
             while True:
 
@@ -177,6 +183,7 @@ class TrainingEnv:
 
                 # iterate through the skill sequence
                 for t in range(self.skill_len):
+                    time += 1
 
                     if obs.dtype == np.uint8:
                         obs = obs.astype(np.float32) / 255
@@ -192,6 +199,7 @@ class TrainingEnv:
                     if LOCAL_VERSION:
                         out = out[:-1]
                     obs, r, this_done, info = out
+                    this_done |= time >= MAX_EPISODE
                     # normalize reward
                     r /= R_NORM
 
@@ -201,6 +209,8 @@ class TrainingEnv:
                     rewards[-1][curr_dones] = 0
                     # update the done array -> everything done after the first done is masked out
                     curr_dones = np.logical_or(curr_dones, this_done)
+
+                self.pbar.set_postfix({"t": time})
 
                 # get the states and actions from the model's history
                 actions = self.model.action_history.to(self.device) # (num_envs, skill_len, action_size)
@@ -262,7 +272,8 @@ class TrainingEnv:
             self.model.eval()
 
             # do all iterations
-            for it in tqdm(range(iterations), desc="Evaluating", leave=False):
+            pbar = tqdm(range(iterations), desc="Evaluating", leave=False)
+            for it in pbar:
 
                 # reset the environment and get the initial state
                 obs = self.env.reset(seed=0)
@@ -272,6 +283,8 @@ class TrainingEnv:
                 curr_dones = np.zeros((self.num_envs,), dtype=bool)
                 # hold rewards (each new reward is added)
                 rewards = np.zeros((self.num_envs,), dtype=float)
+
+                time = -1
 
                 # run until all envs are done
                 while True:
@@ -284,6 +297,7 @@ class TrainingEnv:
 
                     # iterate through the skill sequence
                     for t in range(self.skill_len):
+                        time += 1
 
                         if obs.dtype == np.uint8:
                             obs = obs.astype(np.float32) / 255
@@ -296,6 +310,7 @@ class TrainingEnv:
                         if LOCAL_VERSION:
                             out = out[:-1]
                         obs, r, this_done, info = out
+                        this_done |= time >= MAX_EPISODE
                         # normalize reward
                         r /= R_NORM
 
@@ -304,6 +319,10 @@ class TrainingEnv:
 
                         # update the done array -> everything done after the first done is masked out
                         curr_dones = np.logical_or(curr_dones, this_done)
+
+                        
+
+                        pbar.set_postfix({"t": time})
 
                     # break if all envs are done, TODO: make this more efficient
                     if np.all(curr_dones):
@@ -319,6 +338,7 @@ class TrainingEnv:
             random.seed(seedo)
 
             # return the average reward as float
+            pbar.close()
             return (tot_rewards / tot).item()
 
 
@@ -491,8 +511,8 @@ class BaseREINFORCE(nn.Module):
         pi_mask = torch.diag(torch.ones(pi_preds.shape[1], dtype=torch.bool)).to(pi_preds.device)
         pi_mask = pi_mask.unsqueeze(0).repeat(pi_preds.shape[0], 1, 1)
         pi_probs = torch.log_softmax(pi_preds, -1)[pi_mask]
-        pi_probs *= torch.softmax(skill_logits, -1).view(-1).detach()
-        pi_loss = -torch.sum(pi_probs) / pi_preds.shape[0]
+        # pi_probs *= torch.softmax(-skill_logits, -1).view(-1).detach()
+        pi_loss = -torch.mean(pi_probs)
 
         return loss + (LAMBDA_SKILL * enc_loss) + (LAMBDA_PI * pi_loss)
 
