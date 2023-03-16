@@ -647,19 +647,19 @@ class EnvLogger(Logger):
         ax[0,0].set_title(r"Average Reward")
 
         ax[1,0].plot(self.enc_accs)
-        ax[1,0].set_title(r"Skill-State Inversion Accuracy")
+        ax[1,0].set_title(r"Choice-State Identification Accuracy")
 
         ax[0,1].plot(self.skill_maxs)
-        ax[0,1].set_title(r"Avg Pi-Wise Skill Max")
+        ax[0,1].set_title(r"Avg Max Choice")
 
         ax[2,0].plot(self.skill_kls)
-        ax[2,0].set_title(r"Skill Memory Radius")
+        ax[2,0].set_title(r"Batch-wise Choice Information Radius")
 
         ax[2,1].plot(self.pi_kls)
-        ax[2,1].set_title(r"Pi Memory Radius")
+        ax[2,1].set_title(r"Inter-Policy Information Radius")
 
         ax[1,1].plot(self.pi_accs)
-        ax[1,1].set_title(r"Policy-Pi Inversion Accuracy")
+        ax[1,1].set_title(r"Policy Identification Accuracy")
 
         fig.set_figwidth(12)
         fig.set_figheight(12)
