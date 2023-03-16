@@ -43,6 +43,14 @@ class QuantumPolicy(nn.Module):
             dropout = self.config.encoder_dropout
         )
         
+        self.pi_encoder = SkipNet(
+            in_dim = self.config.state_size + self.config.action_dim*self.config.action_size,
+            h_dim = self.config.encoder_dim,
+            out_dim = self.config.latent_dim,
+            n_layers = self.config.encoder_layers,
+            dropout = self.config.encoder_dropout
+        )
+        self.pi_head = nn.Linear(self.config.latent_dim, self.config.num_pi)
 
 
     def setSkill(self, skills):
@@ -124,14 +132,21 @@ class QuantumPolicy(nn.Module):
 
         skill_encs = self.skill_encoder(torch.softmax(skill_logits, dim=-1))
         skill_encs = F.normalize(skill_encs, p=2, dim=-1)
-        
+
         state_encs = self.state_encoder(states[:,0])
         state_encs = F.normalize(state_encs, p=2, dim=-1)
 
         assert skill_encs.shape == state_encs.shape
         enc_outs = state_encs @ skill_encs.T
 
-        return pi_logits, skill_logits, logits, enc_outs
+        states_to_combo = torch.stack([states]*self.config.num_pi, dim=-2)
+        assert states_to_combo.shape[:-1] == self.flattenActions(pi_logits).shape[:-1]
+        combo = torch.cat((self.flattenActions(torch.softmax(pi_logits, dim=-1)), states_to_combo), dim=-1)
+        pi_preds = self.pi_encoder(combo)
+        pi_preds = torch.mean(pi_preds, dim=1)
+        pi_preds = self.pi_head(pi_preds)
+
+        return pi_logits, skill_logits, logits, enc_outs, pi_preds
 
 
     def piForward(self, states):

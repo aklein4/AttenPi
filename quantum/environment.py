@@ -57,8 +57,8 @@ DISCOUNT = 0.95
 # divide rewards by this factor for normalization
 R_NORM = 10
 
-LAMBDA_SKILL = 0.5
-LAMBDA_KL = 0.1
+LAMBDA_SKILL = 0.25
+LAMBDA_PI = 0.0
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = True
@@ -447,7 +447,7 @@ class BaseREINFORCE(nn.Module):
         """
 
         # (b, t, pi, a_d, a_s), (b, pi), (b, t, a_d, a_s), (b, b)
-        pi_logits, skill_logits, logits, enc_outs = pred
+        pi_logits, skill_logits, logits, enc_outs, pi_preds = pred
         # (b, t, s), (b, t, s_d), (b, t), (b, t)
         s, a, r, d = y
 
@@ -476,11 +476,11 @@ class BaseREINFORCE(nn.Module):
         
         enc_loss = F.cross_entropy(enc_outs, torch.arange(0, batch_size, dtype=torch.long).to(enc_outs.device))
 
-        avg_pi = torch.mean(torch.softmax(pi_logits, dim=-1), dim=-3).detach()
-        avg_pi = torch.stack([avg_pi]*pi_logits.shape[-3], dim=-3)
-        kl_loss = F.kl_div(torch.log_softmax(pi_logits, dim=-1), avg_pi, reduction='batchmean')
+        pi_mask = torch.diag(torch.ones(pi_preds.shape[1], dtype=torch.bool)).to(pi_preds.device).reshape(-1).repeat(pi_preds.shape[0])
+        pi_probs = (torch.softmax(skill_logits, -1).detach().unsqueeze(-1)*torch.softmax(pi_preds, -1)).view(-1)[pi_mask]
+        pi_loss = torch.sum(pi_probs) / pi_preds.shape[0]
 
-        return loss + (LAMBDA_SKILL * enc_loss) + (LAMBDA_KL * -kl_loss)
+        return loss + (LAMBDA_SKILL * enc_loss) + (LAMBDA_PI * pi_loss)
 
 
 class EnvLogger(Logger):
