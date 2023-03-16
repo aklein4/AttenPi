@@ -55,7 +55,7 @@ CheetahPolicy = Config(
     pi_dropout = 0.1,
 
     latent_dim = 4,
-    encoder_dim = 23,
+    encoder_dim = 32,
     encoder_layers = 2,
     encoder_dropout = 0.1,
 

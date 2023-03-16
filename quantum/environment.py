@@ -42,12 +42,12 @@ MAX_BUF_SIZE = 512
 MAX_EPISODE = 1000
 
 # csv log output location
-LOG_LOC = "logs/log.csv"
+LOG_LOC = "logs/semisup_regulator.csv"
 # graph output location
-GRAFF = "logs/graff.png"
+GRAFF = "logs/semisup_regulator.png"
 
 # model checkpoint location
-CHECKPOINT = "local_data/checkpoint.pt"
+CHECKPOINT = "local_data/semisup_regulator.pt"
 
 # model leaarning rate
 LEARNING_RATE = 3e-4
@@ -59,12 +59,12 @@ DISCOUNT = 0.98
 # divide rewards by this factor for normalization
 R_NORM = 100
 
-LAMBDA_SKILL = 0.1
+LAMBDA_SKILL = 0.0
 LAMBDA_PI = 1
-LAMBDA_SEMISUP = 0
+LAMBDA_SEMISUP = 0.1
 
 # whether to perform evaluation stochastically
-STOCH_EVAL = False
+STOCH_EVAL = True
 
 BASELINE = True
 
@@ -731,7 +731,8 @@ def main():
         train_data = env,
         loss_fn = loser.loss,
         logger = logger,
-        batch_size = BATCH_SIZE
+        batch_size = BATCH_SIZE,
+        num_epochs = 50
     )
 
 
