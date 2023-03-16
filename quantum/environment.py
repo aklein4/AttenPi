@@ -58,8 +58,9 @@ DISCOUNT = 0.98
 # divide rewards by this factor for normalization
 R_NORM = 100
 
-LAMBDA_SKILL = 0.5
+LAMBDA_SKILL = 1
 LAMBDA_PI = 1
+LAMBDA_SEMISUP = 0.25
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = False
@@ -514,7 +515,10 @@ class BaseREINFORCE(nn.Module):
         # pi_probs *= torch.softmax(-skill_logits, -1).view(-1).detach()
         pi_loss = -torch.mean(pi_probs)
 
-        return loss + (LAMBDA_SKILL * enc_loss) + (LAMBDA_PI * pi_loss)
+        skill_target = torch.argmax(skill_logits, dim=-1)
+        semisup_loss = F.cross_entropy(skill_logits, skill_target)
+
+        return loss + (LAMBDA_SKILL * enc_loss) + (LAMBDA_PI * pi_loss) + (LAMBDA_SEMISUP * semisup_loss)
 
 
 class EnvLogger(Logger):
