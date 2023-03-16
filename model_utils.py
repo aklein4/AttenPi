@@ -25,26 +25,40 @@ class PositionalEncoding(nn.Module):
         return X
     
 
-def getFeedForward(in_dim, h_dim, out_dim, n_layers, dropout):
-    in_layer = [
+class SkipNet(nn.Module):
+
+    def __init__(self, in_dim, h_dim, out_dim, n_layers, dropout):
+        super().__init__()
+
+        self.in_layer = nn.Sequential(
             nn.Linear(in_dim, h_dim),
             nn.Dropout(dropout),
             nn.ELU(),
-        ]
-    
-    mid_layers = [nn.Sequential(
-        nn.Linear(h_dim, h_dim),
-        nn.Dropout(dropout),
-        nn.ELU(),
-    ) for _ in range(n_layers)]
+        )
+        
+        self.mid_layers = nn.Sequential(
+            *[
+                nn.Sequential(
+                    nn.Linear(2*h_dim, h_dim),
+                    nn.Dropout(dropout),
+                    nn.ELU(),
+                )
+            for _ in range(n_layers)]
+        )
 
-    out_layer = [
-        nn.Linear(h_dim, h_dim),
-        nn.ELU(dropout),
-        nn.Linear(h_dim, out_dim)
-    ]
+        self.out_layer = nn.Sequential(
+            nn.Linear(2*h_dim, h_dim),
+            nn.ELU(dropout),
+            nn.Linear(h_dim, out_dim)
+        )
 
-    network = nn.Sequential(
-        *(in_layer + mid_layers + out_layer)
-    )
-    return network
+
+    def forward(self, x):
+        h = self.in_layer(x)
+        prev = h
+        for layer in self.mid_layers:
+            temp = h
+            h = layer(torch.cat([h, prev], dim=-1))
+            prev = temp
+
+        return self.out_layer(torch.cat([h, prev], dim=-1))

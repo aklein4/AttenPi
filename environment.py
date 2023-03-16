@@ -8,7 +8,7 @@ import gym
 
 from latent_policy import LatentPolicy
 from train_utils import train, Logger
-from model_utils import getFeedForward
+from model_utils import SkipNet
 import configs
 
 from tqdm import tqdm
@@ -27,11 +27,11 @@ N_ENVS = 16
 # number of passes through all envs to make per epoch
 SHUFFLE_RUNS = 1
 # maximum number of (s, a, r, k, d) tuples to store, truncated to newest
-MAX_BUF_SIZE = 1024*2
+MAX_BUF_SIZE = 256
 
 # model config class
-CONFIG = configs.WalkerPolicy
-ENV_NAME = "BipedalWalker-v3"
+CONFIG = configs.CartpolePolicy
+ENV_NAME = "CartPole-v1"
 
 # number of skills in model dict
 N_SKILLS = CONFIG.num_skills
@@ -52,28 +52,28 @@ CHECKPOINT = "local_data/checkpoint.pt"
 # model leaarning rate
 LEARNING_RATE = 1e-3
 # model batch size
-BATCH_SIZE = 32
+BATCH_SIZE = 8
 
 # MDP discount factor
-DISCOUNT = 0.98
+DISCOUNT = 0.95
 # divide rewards by this factor for normalization
-R_NORM = 100
+R_NORM = 10
 # balance between policy and skill rewards
-Kl_LAMBDA = 0.1
+Kl_LAMBDA = 0.9
 
-LOG_TEMP = 3.0
+LOG_TEMP = 1.0
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = True
 
 # baseline hidden layer size
-BASE_DIM = 64
+BASE_DIM = 16
 # baseline number of hidden layers
-BASE_LAYERS = 4
+BASE_LAYERS = 2
 # baseline learning rate
-BASE_LR = 1e-3
+BASE_LR = 1e-2
 # baseline batch size
-BASE_BATCH = 8
+BASE_BATCH = 2
 
 
 class TrainingEnv:
@@ -374,7 +374,7 @@ class BaseREINFORCE(nn.Module):
         super().__init__()
         
         # create a basic feedforward model for the baseline
-        self.baseline = getFeedForward(state_size, h_dim, 1, n_layers, dropout=0.1)
+        self.baseline = SkipNet(state_size, h_dim, 1, n_layers, dropout=0.1)
         self.baseline = self.baseline.to(device)
 
         # create an optimizer to train the baseline
@@ -628,8 +628,8 @@ def main():
         shuffle_runs = SHUFFLE_RUNS,
         discount = DISCOUNT,
         max_buf_size = MAX_BUF_SIZE,
-        device = DEVICE,
-        action_handler=walkerHandler
+        device = DEVICE
+        #action_handler=walkerHandler
     )
 
     # env.sample()

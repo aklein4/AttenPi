@@ -3,7 +3,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from model_utils import getFeedForward
+from model_utils import SkipNet
 
 
 class LatentPolicy(nn.Module):
@@ -12,31 +12,24 @@ class LatentPolicy(nn.Module):
         super().__init__()
         self.config = config
         
-        self.skill_embeddings = nn.Embedding(self.config.num_skills, self.config.h_dim)
+        self.skill_embeddings = nn.Embedding(self.config.num_skills, self.config.skill_embed_dim)
 
-        self.pi_state_encoder = nn.Linear(self.config.state_size, self.config.h_dim)
         self.monitor_state_encoder = nn.Linear(self.config.state_size, self.config.h_dim)
-
-        self.pi_action_embeddings = nn.Embedding(self.config.action_size*self.config.action_dim, self.config.action_embed_dim)
-        self.pi_action_pooler = nn.Linear(self.config.action_embed_dim*self.config.action_dim, self.config.h_dim)
 
         self.monitor_action_embeddings = nn.Embedding(self.config.action_size*self.config.action_dim, self.config.action_embed_dim)
         self.monitor_action_pooler = nn.Linear(self.config.action_embed_dim*self.config.action_dim, self.config.h_dim)
-
-        self.pi_pos_embeddings = nn.Embedding(self.config.skill_len, self.config.h_dim)
+        
         self.monitor_pos_embeddings = nn.Embedding(self.config.skill_len, self.config.h_dim)
 
         monitor_layer = nn.TransformerEncoderLayer(self.config.h_dim, self.config.num_heads_monitor, dim_feedforward=self.config.dim_feedforward_monitor, batch_first=True)
         self.skill_monitor = nn.TransformerEncoder(monitor_layer, num_layers=self.config.num_layers_monitor)
         self.monitor_head = nn.Linear(self.config.h_dim, self.config.num_skills)
 
-        policy_layer = nn.TransformerDecoderLayer(self.config.h_dim, self.config.num_heads, dim_feedforward=self.config.dim_feedforward, batch_first=True)
-        self.pi = nn.TransformerDecoder(policy_layer, num_layers=self.config.num_layers)
-        self.action_head = nn.Linear(self.config.h_dim, self.config.action_size*self.config.action_dim)
+        self.pi = SkipNet(self.config.state_size+self.config.skill_embed_dim, self.config.h_dim, self.config.action_dim*self.config.action_size, self.config.num_layers, self.config.dropout)
 
-        self.chooser = getFeedForward(self.config.state_size, self.config.h_dim, self.config.num_skills, self.config.num_layers_chooser, self.config.dropout_chooser)
+        self.chooser = SkipNet(self.config.state_size, self.config.h_dim, self.config.num_skills, self.config.num_layers, self.config.dropout)
 
-        self.opter = getFeedForward(self.config.state_size, self.config.h_dim, self.config.action_dim*self.config.action_size, self.config.num_layers_opter, self.config.dropout_opter)
+        self.opter = SkipNet(self.config.state_size, self.config.h_dim, self.config.action_dim*self.config.action_size, self.config.num_layers, self.config.dropout)
 
         self.curr_skill = None
         self.n_curr = None
@@ -47,10 +40,9 @@ class LatentPolicy(nn.Module):
     def setSkill(self, skills):
         assert skills.dim() == 1
 
-        self.curr_skill = self.skill_embeddings(skills).unsqueeze(-2)
+        self.curr_skill = self.skill_embeddings(skills)
         self.n_curr = skills.numel()
 
-        self.history = None
         self.state_history = None
         self.action_history = None
         self.t = torch.tensor([0], device=skills.device)
@@ -87,35 +79,15 @@ class LatentPolicy(nn.Module):
         assert states.shape[0] == self.n_curr
         assert self.t < self.config.skill_len
 
-        # turn the states into embedded sequences
-        h_states = self.pi_state_encoder(states)
-        h_states = h_states.unsqueeze(1)
-
-        # add states to history
-        if self.history is None:
-            self.history = h_states
+        if self.state_history is None:
             self.state_history = states.unsqueeze(1)
         else:
-            self.history = torch.cat((self.history, h_states), dim=-2)
-            self.state_history = torch.cat((self.state_history, states.unsqueeze(1)), dim=-2)
-
-        T = self.history.shape[1]//2 + 1
-        pos_encs = self.pi_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
-
-        curr_hist = self.history.clone()
-        curr_hist[:,::2] += pos_encs
-        curr_hist[:, 1::2] += pos_encs[:,:-1]
-
-        seq_len = curr_hist.shape[1]
-        temporal_mask = torch.full((seq_len, seq_len), float('-inf'), device=states.device)
-        for i in range(seq_len):
-            temporal_mask[i, :i+1] = 0
+            self.state_history = torch.cat((self.state_history, states.unsqueeze(1)), dim=1)
 
         # get the policy
-        logits = self.pi(curr_hist, self.curr_skill, tgt_mask=temporal_mask)[:,-1,:].unsqueeze(-2)
-        logits = self.action_head(logits)
-        logits = logits.view(logits.shape[0], 1, self.config.action_dim, self.config.action_size)
-        logits *= self.config.temp
+        logits = self.pi(torch.cat([states, self.curr_skill], dim=-1)) * self.config.temp
+        logits = (1-self.config.dagger_beta)*logits + self.config.dagger_beta*self.opter(states)
+        logits = self.stackActions(logits)
         if action_override is not None:
             print(logits)
 
@@ -131,12 +103,10 @@ class LatentPolicy(nn.Module):
 
         # increment the history
         if self.action_history is None:
-            self.action_history = actions
+            self.action_history = actions.unsqueeze(1)
         else:
-            self.action_history = torch.cat((self.action_history, actions), dim=1)
+            self.action_history = torch.cat((self.action_history, actions.unsqueeze(1)), dim=1)
 
-        hist_actions = self.getActionEmbeddings(actions, self.pi_action_embeddings, self.pi_action_pooler)
-        self.history = torch.cat((self.history, hist_actions), dim=-2)
         self.t += 1
 
         return actions
@@ -192,38 +162,23 @@ class LatentPolicy(nn.Module):
 
         T = states.shape[1]
 
-        # turn the states into embedded sequences
-        h_states = self.pi_state_encoder(states)
-        h_actions = self.getActionEmbeddings(actions, self.pi_action_embeddings, self.pi_action_pooler)
-
-        pos_embs = self.pi_pos_embeddings(torch.arange(T, device=states.device)).unsqueeze(0)
-
-        # interleave the states and actions into a history
-        hist = torch.repeat_interleave(h_states + pos_embs, 2, dim=-2)
-        hist[:, 1::2] = h_actions + pos_embs
-
-        temporal_mask = torch.full((T*2-1, T*2-1), True, device=states.device)
-        for i in range(T*2-1):
-            temporal_mask[i, :i+1] = False 
-
         # get the encoding of the sequence
-        latent_skills = self.skill_embeddings(skills).unsqueeze(-2)
+        latent_skills = torch.stack([self.skill_embeddings(skills)]*T, dim=1)
+        assert latent_skills.shape[:2] == states.shape[:2]
 
         # get the policy
-        logits = self.pi(hist[:,:-1], latent_skills, tgt_mask=temporal_mask)[:, ::2, :]
-        logits = self.action_head(logits)
-        logits = logits.view(*logits.shape[:2], self.config.action_dim, self.config.action_size)
-        logits *= self.config.temp
+        logits = self.pi(torch.cat([states, latent_skills], dim=-1)) * self.config.temp
+        logits = self.stackActions(logits)
         assert logits.shape[:-1] == actions.shape
 
         return logits, self.monitor(states, actions, probs=False, pad_mask=dones), self.chooseSkill(states[:,0], logits=True), self.optForward(states)
 
 
     def optForward(self, states):
-        assert states.dim() == 3
+        assert states.dim() in [2, 3]
         assert states.shape[-1] == self.config.state_size
 
-        return self.stackActions(self.opter(states))
+        return self.stackActions(self.opter(states))*self.config.temp
 
 
     def getOneHotActions(self, actions):
@@ -235,7 +190,7 @@ class LatentPolicy(nn.Module):
     
     def stackActions(self, actions):
         s1 = actions.shape[:-1]
-        return actions.view(*s1, self.config.action_dim, self.config.action_size) * self.config.temp
+        return actions.view(*s1, self.config.action_dim, self.config.action_size)
     
     def getActionEmbeddings(self, actions, emb_mondule, pool_module):
         offset = torch.arange(self.config.action_dim, device=actions.device) * self.config.action_size
