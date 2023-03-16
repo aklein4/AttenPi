@@ -23,7 +23,7 @@ DefaultQuantumPolicy = Config(
     pi_layers = 2,
     pi_dropout = 0.1,
 
-    latent_dim = 8,
+    latent_dim = 4,
     encoder_dim = 16,
     encoder_layers = 2,
     encoder_dropout = 0.1

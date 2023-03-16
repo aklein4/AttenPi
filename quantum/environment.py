@@ -58,6 +58,7 @@ DISCOUNT = 0.95
 R_NORM = 10
 
 LAMBDA_SKILL = 0.5
+LAMBDA_KL = 0.5
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = True
@@ -470,9 +471,14 @@ class BaseREINFORCE(nn.Module):
         masked = chosen[torch.logical_not(d).view(-1).repeat_interleave(a.shape[-1])]
         loss = -torch.mean(masked)
 
+        # skill_logit_targets = torch.argmax(skill_logits, dim=-1)
+        # singlet_loss = F.cross_entropy(skill_logits, skill_logit_targets)
+        
         enc_loss = F.cross_entropy(enc_outs, torch.arange(0, batch_size, dtype=torch.long).to(enc_outs.device))
 
-        return loss + LAMBDA_SKILL * enc_loss
+        avg_pi = torch.mean(torch.softmax(pi_logits, dim=-1), dim=0)
+
+        return loss + LAMBDA_SKILL * (enc_loss)
 
 
 class EnvLogger(Logger):
@@ -491,7 +497,9 @@ class EnvLogger(Logger):
 
         # store metrics over epochs
         self.avg_rewards = []
-        self.accs = []
+        self.enc_accs = []
+        self.skill_maxs = []
+        self.skill_kls = []
 
         # basic parameters
         self.log_loc = log_loc
@@ -502,7 +510,7 @@ class EnvLogger(Logger):
         try:
             with open(self.log_loc, 'w') as csvfile:
                 spamwriter = csv.writer(csvfile, dialect='excel')
-                spamwriter.writerow(["epoch", "avg_reward", "skill_acc"])
+                spamwriter.writerow(["epoch", "avg_reward", "enc_acc", "skill_max", "skill_kl"])
         except:
             pass
 
@@ -527,35 +535,67 @@ class EnvLogger(Logger):
             corr = 0
             tot = 0
             for i in range(len(train_log[0])):
-                corr += (train_log[0][i][3].argmax(dim=-1) == torch.arange(0, train_log[0][i][3].shape[0], dtype=torch.long).to(train_log[0][i][3].device)).float().sum()
+                corr += (torch.argmax(train_log[0][i][3], dim=-1) == torch.arange(0, train_log[0][i][3].shape[0], dtype=torch.long).to(train_log[0][i][3].device)).sum()
                 tot += train_log[0][i][3].shape[0]
             acc = (corr / tot).item()
+
+            p = 0
+            tot = 0
+            for i in range(len(train_log[0])):
+                p += torch.softmax(train_log[0][i][1], dim=-1).max(dim=-1)[0].sum()
+                tot += train_log[0][i][1].shape[0]
+            skill_max = (p / tot).item()
+
+            avg_skill = torch.zeros_like(train_log[0][0][1][0])
+            tot = 0
+            for i in range(len(train_log[0])):
+                avg_skill += torch.sum(torch.softmax(train_log[0][i][1], dim=-1), dim=0)
+                tot += train_log[0][i][1].shape[0]
+            avg_skill /= tot
+            kl = 0
+            tot = 0
+            for i in range(len(train_log[0])):
+                kl += F.kl_div(torch.log_softmax(train_log[0][i][1], dim=-1), avg_skill.unsqueeze(0), reduction='sum')
+                tot += train_log[0][i][1].shape[0]
+            skill_kl = (kl / tot).item()
+
         else:
             acc = 1/BATCH_SIZE
+            skill_max = 1/self.model.config.num_pi
+            skill_kl = None
+
 
         # save metrics
         self.avg_rewards.append(curr_r)
-        self.accs.append(acc)
+        self.enc_accs.append(acc)
+        self.skill_maxs.append(skill_max)
+        self.skill_kls.append(skill_kl)
 
         # append metrics to csv file
         try:
             with open(self.log_loc, 'a') as csvfile:
                 spamwriter = csv.writer(csvfile, delimiter=',', lineterminator='\n')
-                spamwriter.writerow([len(self.avg_rewards)-2, curr_r, acc]) # -2 because of init call
+                spamwriter.writerow([len(self.avg_rewards)-2, curr_r, acc, skill_max, skill_kl]) # -2 because of init call
         except:
             pass
 
         """ Plot the metrics """
-        fig, ax = plt.subplots(2)
+        fig, ax = plt.subplots(4)
 
         ax[0].plot(self.avg_rewards)
         ax[0].set_title(r"Average Reward")
 
-        ax[1].plot(self.accs)
-        ax[1].set_title(r"Skill Inversion Accuracy")
+        ax[1].plot(self.enc_accs)
+        ax[1].set_title(r"Skill-State Inversion Accuracy")
+
+        ax[2].plot(self.skill_maxs)
+        ax[2].set_title(r"Avg Pi-Wise Skill Max")
+
+        ax[3].plot(self.skill_kls)
+        ax[3].set_title(r"Skill Memory Radius")
 
         fig.set_figwidth(6)
-        fig.set_figheight(8)
+        fig.set_figheight(16)
         plt.tight_layout()
         try:
             plt.savefig(self.graff)
