@@ -23,13 +23,13 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LOCAL_VERSION = DEVICE == torch.device("cpu")
 
 # number of concurrent environments
-N_ENVS = 1
+N_ENVS = 2
 # number of passes through all envs to make per epoch
-SHUFFLE_RUNS = 16
+SHUFFLE_RUNS = 8
 
 # model config class
 CONFIG = configs.KangarooPolicy
-ENV_NAME = "ALE/Kangaroo-v5"
+ENV_NAME = "Kangaroo-v4"
 
 # length of each skill sequence
 SKILL_LEN = CONFIG.skill_len
@@ -164,6 +164,9 @@ class TrainingEnv:
             # run until all envs are done
             while True:
 
+                if obs.dtype == np.uint8:
+                    obs = obs.astype(np.float32) / 255
+
                 # get the chosen skill and set it in the model
                 skill = self.model.setChooseSkill(torch.tensor(obs).to(self.device))
 
@@ -261,9 +264,6 @@ class TrainingEnv:
             # do all iterations
             for it in tqdm(range(iterations), desc="Evaluating", leave=False):
 
-                if obs.dtype == np.uint8:
-                        obs = obs.astype(np.float32) / 255
-
                 # reset the environment and get the initial state
                 obs = self.env.reset(seed=0)
                 if LOCAL_VERSION:
@@ -276,11 +276,18 @@ class TrainingEnv:
                 # run until all envs are done
                 while True:
 
+
+                    if obs.dtype == np.uint8:
+                        obs = obs.astype(np.float32) / 255
+        
                     # get the chosen skill and set it in the model
                     self.model.setChooseSkill(torch.tensor(obs).to(self.device))
 
                     # iterate through the skill sequence
                     for t in range(self.skill_len):
+
+                        if obs.dtype == np.uint8:
+                            obs = obs.astype(np.float32) / 255
 
                         # sample an action using the current state, greedy if not STOCH_EVAL
                         a = self.model.policy(torch.tensor(obs).to(self.device), stochastic=STOCH_EVAL)
@@ -656,7 +663,7 @@ def walkerHandler(a):
     return (a-1).float()
 
 def KangarooHandler(a):
-    return a.bool()
+    return a.int()
 
 def main():
 
@@ -708,4 +715,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
