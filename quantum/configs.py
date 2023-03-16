@@ -32,3 +32,29 @@ DefaultQuantumPolicy = Config(
 
 
 CartpolePolicy = DefaultQuantumPolicy
+
+
+WalkerPolicy = Config(
+    temp = 1,
+
+    state_size = 24,
+    action_dim = 4,
+    action_size = 3,
+
+    num_pi = 4,
+    skill_len = 4,
+    diff_pi = True,
+
+    delta_dim = 64,
+    delta_layers = 4,
+    delta_dropout = 0.1,
+
+    pi_dim = 64,
+    pi_layers = 4,
+    pi_dropout = 0.1,
+
+    latent_dim = 8,
+    encoder_dim = 64,
+    encoder_layers = 4,
+    encoder_dropout = 0.1
+)

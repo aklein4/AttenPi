@@ -30,8 +30,8 @@ SHUFFLE_RUNS = 1
 MAX_BUF_SIZE = 256
 
 # model config class
-CONFIG = configs.CartpolePolicy
-ENV_NAME = "CartPole-v1"
+CONFIG = configs.WalkerPolicy
+ENV_NAME = "BipedalWalker-v3"
 
 # length of each skill sequence
 SKILL_LEN = CONFIG.skill_len
@@ -55,7 +55,7 @@ BATCH_SIZE = 8
 # MDP discount factor
 DISCOUNT = 0.95
 # divide rewards by this factor for normalization
-R_NORM = 10
+R_NORM = 100
 
 LAMBDA_SKILL = 0.25
 LAMBDA_PI = 0.1
@@ -66,9 +66,9 @@ STOCH_EVAL = True
 BASELINE = True
 
 # baseline hidden layer size
-BASE_DIM = 16
+BASE_DIM = 64
 # baseline number of hidden layers
-BASE_LAYERS = 2
+BASE_LAYERS = 4
 # baseline learning rate
 BASE_LR = 1e-2
 # baseline batch size
