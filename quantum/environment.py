@@ -58,7 +58,7 @@ DISCOUNT = 0.95
 R_NORM = 10
 
 LAMBDA_SKILL = 0.5
-LAMBDA_KL = 0.5
+LAMBDA_KL = 0.1
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = True
@@ -476,9 +476,11 @@ class BaseREINFORCE(nn.Module):
         
         enc_loss = F.cross_entropy(enc_outs, torch.arange(0, batch_size, dtype=torch.long).to(enc_outs.device))
 
-        avg_pi = torch.mean(torch.softmax(pi_logits, dim=-1), dim=0)
+        avg_pi = torch.mean(torch.softmax(pi_logits, dim=-1), dim=-3).detach()
+        avg_pi = torch.stack([avg_pi]*pi_logits.shape[-3], dim=-3)
+        kl_loss = F.kl_div(torch.log_softmax(pi_logits, dim=-1), avg_pi, reduction='batchmean')
 
-        return loss + LAMBDA_SKILL * (enc_loss)
+        return loss + (LAMBDA_SKILL * enc_loss) + (LAMBDA_KL * -kl_loss)
 
 
 class EnvLogger(Logger):
@@ -500,6 +502,7 @@ class EnvLogger(Logger):
         self.enc_accs = []
         self.skill_maxs = []
         self.skill_kls = []
+        self.pi_kls = []
 
         # basic parameters
         self.log_loc = log_loc
@@ -510,7 +513,7 @@ class EnvLogger(Logger):
         try:
             with open(self.log_loc, 'w') as csvfile:
                 spamwriter = csv.writer(csvfile, dialect='excel')
-                spamwriter.writerow(["epoch", "avg_reward", "enc_acc", "skill_max", "skill_kl"])
+                spamwriter.writerow(["epoch", "avg_reward", "enc_acc", "skill_max", "skill_kl", "pi_kl"])
         except:
             pass
 
@@ -559,10 +562,20 @@ class EnvLogger(Logger):
                 tot += train_log[0][i][1].shape[0]
             skill_kl = (kl / tot).item()
 
+            kl = 0
+            tot = 0
+            for i in range(len(train_log[0])):
+                avg_pi = torch.mean(torch.softmax(train_log[0][i][0], dim=-1), dim=-3)
+                avg_pi = torch.stack([avg_pi]*train_log[0][i][0].shape[-3], dim=-3)
+                kl += F.kl_div(torch.log_softmax(train_log[0][i][0], dim=-1), avg_pi, reduction='sum')
+                tot += train_log[0][i][0].shape[0]*train_log[0][i][0].shape[1]*train_log[0][i][0].shape[2]
+            pi_kl = (kl / tot).item()
+
         else:
             acc = 1/BATCH_SIZE
             skill_max = 1/self.model.config.num_pi
             skill_kl = None
+            pi_kl = None
 
 
         # save metrics
@@ -570,32 +583,36 @@ class EnvLogger(Logger):
         self.enc_accs.append(acc)
         self.skill_maxs.append(skill_max)
         self.skill_kls.append(skill_kl)
+        self.pi_kls.append(pi_kl)
 
         # append metrics to csv file
         try:
             with open(self.log_loc, 'a') as csvfile:
                 spamwriter = csv.writer(csvfile, delimiter=',', lineterminator='\n')
-                spamwriter.writerow([len(self.avg_rewards)-2, curr_r, acc, skill_max, skill_kl]) # -2 because of init call
+                spamwriter.writerow([len(self.avg_rewards)-2, curr_r, acc, skill_max, skill_kl, pi_kl]) # -2 because of init call
         except:
             pass
 
         """ Plot the metrics """
-        fig, ax = plt.subplots(4)
+        fig, ax = plt.subplots(3, 2)
 
-        ax[0].plot(self.avg_rewards)
-        ax[0].set_title(r"Average Reward")
+        ax[0,0].plot(self.avg_rewards)
+        ax[0,0].set_title(r"Average Reward")
 
-        ax[1].plot(self.enc_accs)
-        ax[1].set_title(r"Skill-State Inversion Accuracy")
+        ax[1,0].plot(self.enc_accs)
+        ax[1,0].set_title(r"Skill-State Inversion Accuracy")
 
-        ax[2].plot(self.skill_maxs)
-        ax[2].set_title(r"Avg Pi-Wise Skill Max")
+        ax[2,0].plot(self.skill_maxs)
+        ax[2,0].set_title(r"Avg Pi-Wise Skill Max")
 
-        ax[3].plot(self.skill_kls)
-        ax[3].set_title(r"Skill Memory Radius")
+        ax[0,1].plot(self.skill_kls)
+        ax[0,1].set_title(r"Skill Memory Radius")
 
-        fig.set_figwidth(6)
-        fig.set_figheight(16)
+        ax[1,1].plot(self.pi_kls)
+        ax[1,1].set_title(r"Pi Memory Radius")
+
+        fig.set_figwidth(12)
+        fig.set_figheight(12)
         plt.tight_layout()
         try:
             plt.savefig(self.graff)
