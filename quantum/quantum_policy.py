@@ -144,7 +144,7 @@ class QuantumPolicy(nn.Module):
 
         states_to_combo = torch.stack([states]*self.config.num_pi, dim=-2)
         assert states_to_combo.shape[:-1] == self.flattenActions(pi_logits).shape[:-1]
-        combo = torch.cat((self.flattenActions(20*torch.softmax((pi_logits + torch.distributions.gumbel.Gumbel(torch.zeros_like(pi_logits), torch.ones_like(pi_logits)).sample()), dim=-1)), states_to_combo), dim=-1)
+        combo = torch.cat((self.flattenActions(torch.softmax(10*(pi_logits + torch.distributions.gumbel.Gumbel(torch.zeros_like(pi_logits), torch.ones_like(pi_logits)).sample()), dim=-1)), states_to_combo), dim=-1)
         if not self.config.diff_pi:
             combo = combo.detach()
         pi_preds = self.pi_encoder(combo)
