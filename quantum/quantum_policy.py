@@ -120,7 +120,7 @@ class QuantumPolicy(nn.Module):
 
 
     def forward(self, x):
-        states = x
+        states, dones = x
 
         assert states.dim() == 3
         assert states.shape[1] == self.config.skill_len
@@ -142,7 +142,10 @@ class QuantumPolicy(nn.Module):
         states_to_combo = torch.stack([states]*self.config.num_pi, dim=-2)
         assert states_to_combo.shape[:-1] == self.flattenActions(pi_logits).shape[:-1]
         combo = torch.cat((self.flattenActions(torch.softmax(pi_logits, dim=-1)), states_to_combo), dim=-1)
+        if not self.config.diff_pi:
+            combo = combo.detach()
         pi_preds = self.pi_encoder(combo)
+        pi_preds *= 1-dones.float().unsqueeze(-1).unsqueeze(-1)
         pi_preds = torch.mean(pi_preds, dim=1)
         pi_preds = self.pi_head(pi_preds)
 

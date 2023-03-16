@@ -14,6 +14,7 @@ DefaultQuantumPolicy = Config(
 
     num_pi = 3,
     skill_len = 8,
+    diff_pi = False,
 
     delta_dim = 16,
     delta_layers = 2,

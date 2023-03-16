@@ -48,7 +48,7 @@ GRAFF = "logs/graff.png"
 CHECKPOINT = "local_data/checkpoint.pt"
 
 # model leaarning rate
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 5e-4
 # model batch size
 BATCH_SIZE = 8
 
@@ -58,7 +58,7 @@ DISCOUNT = 0.95
 R_NORM = 10
 
 LAMBDA_SKILL = 0.25
-LAMBDA_PI = 0.0
+LAMBDA_PI = 0.1
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = True
@@ -347,7 +347,7 @@ class TrainingEnv:
         # stack into tensors
         accum = [torch.stack(accum[i]) for i in range(len(accum))]
 
-        return accum[0], accum
+        return (accum[0], accum[3]), accum
 
 
 class BaseREINFORCE(nn.Module):
@@ -476,9 +476,11 @@ class BaseREINFORCE(nn.Module):
         
         enc_loss = F.cross_entropy(enc_outs, torch.arange(0, batch_size, dtype=torch.long).to(enc_outs.device))
 
-        pi_mask = torch.diag(torch.ones(pi_preds.shape[1], dtype=torch.bool)).to(pi_preds.device).reshape(-1).repeat(pi_preds.shape[0])
-        pi_probs = (torch.softmax(skill_logits, -1).detach().unsqueeze(-1)*torch.softmax(pi_preds, -1)).view(-1)[pi_mask]
-        pi_loss = torch.sum(pi_probs) / pi_preds.shape[0]
+        pi_mask = torch.diag(torch.ones(pi_preds.shape[1], dtype=torch.bool)).to(pi_preds.device)
+        pi_mask = pi_mask.unsqueeze(0).repeat(pi_preds.shape[0], 1, 1)
+        pi_probs = torch.log_softmax(pi_preds, -1)[pi_mask]
+        pi_probs *= torch.softmax(skill_logits, -1).view(-1).detach()
+        pi_loss = -torch.sum(pi_probs) / pi_preds.shape[0]
 
         return loss + (LAMBDA_SKILL * enc_loss) + (LAMBDA_PI * pi_loss)
 
@@ -503,6 +505,7 @@ class EnvLogger(Logger):
         self.skill_maxs = []
         self.skill_kls = []
         self.pi_kls = []
+        self.pi_accs = []
 
         # basic parameters
         self.log_loc = log_loc
@@ -513,7 +516,7 @@ class EnvLogger(Logger):
         try:
             with open(self.log_loc, 'w') as csvfile:
                 spamwriter = csv.writer(csvfile, dialect='excel')
-                spamwriter.writerow(["epoch", "avg_reward", "enc_acc", "skill_max", "skill_kl", "pi_kl"])
+                spamwriter.writerow(["epoch", "avg_reward", "skill_max", "enc_acc", "skill_kl", "pi_acc", "pi_kl"])
         except:
             pass
 
@@ -571,11 +574,21 @@ class EnvLogger(Logger):
                 tot += train_log[0][i][0].shape[0]*train_log[0][i][0].shape[1]*train_log[0][i][0].shape[2]
             pi_kl = (kl / tot).item()
 
+            corr = 0
+            tot = 0
+            for i in range(len(train_log[0])):
+                pi_targ = torch.arange(0, train_log[0][i][4].shape[1], dtype=torch.long).to(train_log[0][i][4].device)
+                pi_targ = torch.stack([pi_targ]*train_log[0][i][4].shape[0], dim=0)
+                corr += (torch.argmax(train_log[0][i][4], dim=-1) == pi_targ).sum()
+                tot += train_log[0][i][4].shape[0]*train_log[0][i][4].shape[1]
+            pi_acc = (corr / tot).item()
+
         else:
             acc = 1/BATCH_SIZE
             skill_max = 1/self.model.config.num_pi
             skill_kl = None
             pi_kl = None
+            pi_acc = 1/self.model.config.num_pi
 
 
         # save metrics
@@ -584,12 +597,13 @@ class EnvLogger(Logger):
         self.skill_maxs.append(skill_max)
         self.skill_kls.append(skill_kl)
         self.pi_kls.append(pi_kl)
+        self.pi_accs.append(pi_acc)
 
         # append metrics to csv file
         try:
             with open(self.log_loc, 'a') as csvfile:
                 spamwriter = csv.writer(csvfile, delimiter=',', lineterminator='\n')
-                spamwriter.writerow([len(self.avg_rewards)-2, curr_r, acc, skill_max, skill_kl, pi_kl]) # -2 because of init call
+                spamwriter.writerow([len(self.avg_rewards)-2, curr_r, skill_max, acc, skill_kl, pi_acc, pi_kl]) # -2 because of init call
         except:
             pass
 
@@ -602,14 +616,17 @@ class EnvLogger(Logger):
         ax[1,0].plot(self.enc_accs)
         ax[1,0].set_title(r"Skill-State Inversion Accuracy")
 
-        ax[2,0].plot(self.skill_maxs)
-        ax[2,0].set_title(r"Avg Pi-Wise Skill Max")
+        ax[0,1].plot(self.skill_maxs)
+        ax[0,1].set_title(r"Avg Pi-Wise Skill Max")
 
-        ax[0,1].plot(self.skill_kls)
-        ax[0,1].set_title(r"Skill Memory Radius")
+        ax[2,0].plot(self.skill_kls)
+        ax[2,0].set_title(r"Skill Memory Radius")
 
-        ax[1,1].plot(self.pi_kls)
-        ax[1,1].set_title(r"Pi Memory Radius")
+        ax[2,1].plot(self.pi_kls)
+        ax[2,1].set_title(r"Pi Memory Radius")
+
+        ax[1,1].plot(self.pi_accs)
+        ax[1,1].set_title(r"Policy-Pi Inversion Accuracy")
 
         fig.set_figwidth(12)
         fig.set_figheight(12)
