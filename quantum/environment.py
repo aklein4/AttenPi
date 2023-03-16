@@ -17,6 +17,7 @@ import random
 import csv
 import matplotlib.pyplot as plt
 
+INIT_MODEL = "./local_data/cheetah_init.pt"
 
 # device to use for model
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -63,7 +64,7 @@ LAMBDA_PI = 1
 LAMBDA_SEMISUP = 0
 
 # whether to perform evaluation stochastically
-STOCH_EVAL = True
+STOCH_EVAL = False
 
 BASELINE = True
 
@@ -680,7 +681,7 @@ class EnvLogger(Logger):
 
 
 def CheetahHandler(a):
-    return (a-3).float() / 2.0
+    return (a-2).float() / 2.0
 
 def KangarooHandler(a):
     return a.int()
@@ -689,6 +690,7 @@ def main():
 
     # initialize the model that we will train
     model = QuantumPolicy(CONFIG)
+    model.load_state_dict(torch.load(INIT_MODEL))
     model.to(DEVICE)
 
     # initialize our training environment
