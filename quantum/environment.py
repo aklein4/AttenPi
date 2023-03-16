@@ -25,7 +25,7 @@ LOCAL_VERSION = True
 # number of concurrent environments
 N_ENVS = 4
 # number of passes through all envs to make per epoch
-SHUFFLE_RUNS = 2
+SHUFFLE_RUNS = 1
 
 # model config class
 CONFIG = configs.CheetahPolicy
@@ -36,7 +36,7 @@ SKILL_LEN = CONFIG.skill_len
 
 # number of evaluation iterations (over all envs)
 EVAL_ITERS = 1
-MAX_BUF_SIZE = 1025
+MAX_BUF_SIZE = 512
 
 MAX_EPISODE = 1000
 
@@ -58,12 +58,12 @@ DISCOUNT = 0.98
 # divide rewards by this factor for normalization
 R_NORM = 100
 
-LAMBDA_SKILL = 1
+LAMBDA_SKILL = 0.1
 LAMBDA_PI = 1
-LAMBDA_SEMISUP = 0.25
+LAMBDA_SEMISUP = 0
 
 # whether to perform evaluation stochastically
-STOCH_EVAL = False
+STOCH_EVAL = True
 
 BASELINE = True
 
@@ -503,9 +503,6 @@ class BaseREINFORCE(nn.Module):
         chosen = multed.view(-1, multed.shape[-1])[range(a.numel()),a.view(-1)]
         masked = chosen[torch.logical_not(d).view(-1).repeat_interleave(a.shape[-1])]
         loss = -torch.mean(masked)
-
-        # skill_logit_targets = torch.argmax(skill_logits, dim=-1)
-        # singlet_loss = F.cross_entropy(skill_logits, skill_logit_targets)
         
         enc_loss = F.cross_entropy(enc_outs, torch.arange(0, enc_outs.shape[0], dtype=torch.long).to(enc_outs.device))
 

@@ -130,7 +130,10 @@ class QuantumPolicy(nn.Module):
         skill_logits = self.chooseSkill(states[:,0], logits=True)
         logits = self.mergePi(pi_logits, torch.softmax(skill_logits, dim=-1))
 
-        skill_encs = self.skill_encoder(torch.softmax(skill_logits, dim=-1))
+        enc_logits = skill_logits
+        if not self.config.diff_delta:
+            enc_logits = enc_logits.detach()
+        skill_encs = self.skill_encoder(torch.log_softmax(enc_logits, dim=-1))
         skill_encs = F.normalize(skill_encs, p=2, dim=-1)
 
         state_encs = self.state_encoder(states[:,0])
@@ -141,7 +144,7 @@ class QuantumPolicy(nn.Module):
 
         states_to_combo = torch.stack([states]*self.config.num_pi, dim=-2)
         assert states_to_combo.shape[:-1] == self.flattenActions(pi_logits).shape[:-1]
-        combo = torch.cat((self.flattenActions(torch.softmax(pi_logits, dim=-1)), states_to_combo), dim=-1)
+        combo = torch.cat((self.flattenActions(20*torch.softmax((pi_logits + torch.distributions.gumbel.Gumbel(torch.zeros_like(pi_logits), torch.ones_like(pi_logits)).sample()), dim=-1)), states_to_combo), dim=-1)
         if not self.config.diff_pi:
             combo = combo.detach()
         pi_preds = self.pi_encoder(combo)
