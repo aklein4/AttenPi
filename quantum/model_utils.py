@@ -48,7 +48,7 @@ class SkipNet(nn.Module):
 
         self.out_layer = nn.Sequential(
             nn.Linear(2*h_dim, h_dim),
-            nn.ELU(dropout),
+            nn.ELU(),
             nn.Linear(h_dim, out_dim)
         )
 

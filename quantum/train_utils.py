@@ -198,7 +198,7 @@ def train(model, optimizer, train_data, loss_fn, val_data=None, num_epochs=None,
                 # compute gradient and do SGD step
                 optimizer.zero_grad()
                 loss.backward()
-                
+
                 mem = get_mem_use()
                 if mem >= 0.75:
                     mem = (mem, "x")

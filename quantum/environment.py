@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import gym
 # from stable_baselines3 import PPO
 
-from latent_policy import LatentPolicy
+from quantum_policy import QuantumPolicy
 from train_utils import train, Logger
 from model_utils import SkipNet
 import configs
@@ -26,15 +26,13 @@ LOCAL_VERSION = DEVICE == torch.device("cpu")
 N_ENVS = 16
 # number of passes through all envs to make per epoch
 SHUFFLE_RUNS = 1
-# maximum number of (s, a, r, k, d) tuples to store, truncated to newest
+# maximum number of (s, a, r, d) tuples to store, truncated to newest
 MAX_BUF_SIZE = 256
 
 # model config class
 CONFIG = configs.CartpolePolicy
 ENV_NAME = "CartPole-v1"
 
-# number of skills in model dict
-N_SKILLS = CONFIG.num_skills
 # length of each skill sequence
 SKILL_LEN = CONFIG.skill_len
 
@@ -58,13 +56,13 @@ BATCH_SIZE = 8
 DISCOUNT = 0.95
 # divide rewards by this factor for normalization
 R_NORM = 10
-# balance between policy and skill rewards
-Kl_LAMBDA = 0.9
 
-LOG_TEMP = 1.0
+LAMBDA_SKILL = 0.5
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = True
+
+BASELINE = True
 
 # baseline hidden layer size
 BASE_DIM = 16
@@ -119,14 +117,13 @@ class TrainingEnv:
         # device to store everything on
         self.device = device
 
-        # should hold (s, a, r, k, d) tuples
+        # should hold (s, a, r, d) tuples
         # temporal length in each tuple should be skill_len
         self.data = []
 
         # info related to the env/model
         self.action_size = model.config.action_size
         self.state_size = model.config.state_size
-        self.num_skills = model.config.num_skills
 
         # suffle outgoing indices during __getitem__
         self.shuffler = []
@@ -135,10 +132,10 @@ class TrainingEnv:
     def shuffle(self):
         """ Sample from the environment and shuffle the data buffer.
         """
+        self.data = []
         # sample shuffler_runs times
         for i in tqdm(range(self.shuffle_runs), desc="Exploring", leave=False):
             self.sample()
-        self.data = self.data[-self.max_buf_size:]
 
         # shuffle shuffler
         self.shuffler = list(range(len(self.data)))
@@ -146,7 +143,7 @@ class TrainingEnv:
 
 
     def sample(self):
-        """ Sample (s, a, r, k, d) tuples from the environment and store them in the data buffer,
+        """ Sample (s, a, r, d) tuples from the environment and store them in the data buffer,
         discarding the oldest tuples if the buffer is full.
         """
 
@@ -217,7 +214,7 @@ class TrainingEnv:
 
                     # store it if it won't be completely masked out
                     if torch.any(torch.logical_not(d)):
-                        self.data.append((s, a, r, skill[i], d))
+                        self.data.append((s, a, r, d))
 
                 # break if all envs are done, TODO: make this more efficient
                 if np.all(curr_dones):
@@ -324,7 +321,7 @@ class TrainingEnv:
             getter (int or tuple): Index to get the batch from, or (index, batchsize) tuple
 
         Returns:
-            tuple: (s, a, k, d) x, and (s, a, r, k, d) y
+            tuple: s as x, and (s, a, r, d) as y
         """
         # handle input
         index = getter
@@ -336,25 +333,20 @@ class TrainingEnv:
         indices = self.shuffler[index:index+batchsize]
         
         # accumulate the data tuples into batch lists
-        accum = ([], [], [], [], [])
+        accum = ([], [], [], [])
         for i in indices:
-            s, a, r, k, d = self.data[i]
+            s, a, r, d = self.data[i]
 
             # maintain order in tuples
             accum[0].append(s)
             accum[1].append(a)
             accum[2].append(r)
-            accum[3].append(k)
-            accum[4].append(d)
+            accum[3].append(d)
 
         # stack into tensors
         accum = [torch.stack(accum[i]) for i in range(len(accum))]
 
-        # remove r from x
-        x = accum.copy()
-        x.pop(2)
-
-        return x, accum
+        return accum[0], accum
 
 
 class BaseREINFORCE(nn.Module):
@@ -428,7 +420,7 @@ class BaseREINFORCE(nn.Module):
         """
         # use zero if we are not using baseline
         if self.disable_baseline:
-            return torch.zeros_like(x[..., 0])
+            return torch.zeros_like(x[..., :1])
 
         # set to eval mode
         self.eval()
@@ -446,17 +438,19 @@ class BaseREINFORCE(nn.Module):
         - chooser loss
 
         Args:
-            pred (tuple): (pi_logits, monitor_logits, pred_k) x tuple
-            y (tuple): (s, a, r, k, d) y tuple
+            pred (tuple): (pi_logits, skill_logits, logits) x tuple
+            y (tuple): (s, a, r, d) y tuple
 
         Returns:
-            _type_: _description_
+            torch.tensor: Combined loss of the model
         """
 
-        # (b, t, a_d, a_s), (b, k), (b, k), (b, t, a_d, a_s)
-        pi_logits, mon, pred_k, pred_opt = pred
-        # (b, t, s), (b, t, s_d), (b, t), (b), (b, t)
-        s, a, r, k, d = y
+        # (b, t, pi, a_d, a_s), (b, pi), (b, t, a_d, a_s), (b, b)
+        pi_logits, skill_logits, logits, enc_outs = pred
+        # (b, t, s), (b, t, s_d), (b, t), (b, t)
+        s, a, r, d = y
+
+        batch_size = s.shape[0]
 
         # get the baseline prediction, squeeze to match r
         base = self.predict_baseline(s).squeeze(-1)
@@ -465,51 +459,20 @@ class BaseREINFORCE(nn.Module):
         # train the baseline now that we are done with it
         self.train_baseline(s, r)
 
-        # combine the monitor reward with the policy reward
-        policy_r = r-base.detach()
+        # get the advantage from the reward and baseline
+        A = r - base.detach()
         # unsqueeze to broadcast with pred_opt
-        policy_r = policy_r.unsqueeze(-1).unsqueeze(-1)
+        A = A.unsqueeze(-1).unsqueeze(-1)
+        assert A.dim() == logits.dim()
 
-        opt_probs = torch.softmax(pred_opt, dim=-1)
-        opt_multed = opt_probs * policy_r
-        opt_chosen = opt_multed.view(-1, opt_multed.shape[-1])[range(a.numel()),a.view(-1)]
-        opt_masked = opt_chosen[torch.logical_not(d).view(-1).repeat_interleave(a.shape[-1])]
-        opt_loss = -torch.mean(opt_masked)
-
-        # get 1 where the monitor is correct, -1 where it is wrong
-        mon_rewards = torch.log_softmax(mon, -1)[range(k.numel()), k]
-        # unsqueeze to broadcast with r
-        mon_rewards.unsqueeze_(1).unsqueeze_(-1).unsqueeze_(-1)
-        assert mon_rewards.dim() == pi_logits.dim()
-
-        # get log probabilities of each action
-        log_probs = torch.log_softmax(pi_logits*LOG_TEMP, dim=-1)
-        # multiply log probabilities by rewards
-        multed = log_probs * mon_rewards.detach()
-        # index into vector with only the chosen actions
+        multed = torch.log_softmax(logits, dim=-1) * A
         chosen = multed.view(-1, multed.shape[-1])[range(a.numel()),a.view(-1)]
-        # mask out actions that were taken in a done state
         masked = chosen[torch.logical_not(d).view(-1).repeat_interleave(a.shape[-1])]
-        # calculate the policy loss according to REINFORCE
-        elbo_loss = -(1-Kl_LAMBDA)*torch.mean(masked) + Kl_LAMBDA*F.kl_div(torch.softmax(pi_logits, dim=-1), torch.softmax(pred_opt, dim=-1).detach(), reduction='batchmean')
+        loss = -torch.mean(masked)
 
-        # monitor loss is simply cross entropy of pred vs actual
-        monitor_loss = F.cross_entropy(mon, k)
+        enc_loss = F.cross_entropy(enc_outs, torch.arange(0, batch_size, dtype=torch.long).to(enc_outs.device))
 
-        # chooser reward is return to first state where skill was chosen
-        chooser_r = (r-base)[:,0]
-
-        # get log probabilities of each skill
-        chooser_probs = torch.log_softmax(pred_k, dim=-1)
-        # index into vector with only the chosen skills
-        chooser_chosen = chooser_probs[range(k.numel()),k] # k is vector
-        assert chooser_chosen.shape == chooser_r.shape
-
-        # chooser loss is REINFORCE, similar to policy
-        chooser_loss = -torch.mean(chooser_chosen * chooser_r)
-
-        # return superposition of all losses
-        return opt_loss + elbo_loss + monitor_loss + chooser_loss
+        return loss + LAMBDA_SKILL * enc_loss
 
 
 class EnvLogger(Logger):
@@ -536,9 +499,12 @@ class EnvLogger(Logger):
         self.eval_iters = eval_iters
 
         # create metric file and write header
-        with open(self.log_loc, 'w') as csvfile:
-            spamwriter = csv.writer(csvfile, dialect='excel')
-            spamwriter.writerow(["epoch", "avg_reward", "skill_acc"])
+        try:
+            with open(self.log_loc, 'w') as csvfile:
+                spamwriter = csv.writer(csvfile, dialect='excel')
+                spamwriter.writerow(["epoch", "avg_reward", "skill_acc"])
+        except:
+            pass
 
 
     def initialize(self, model):
@@ -554,36 +520,30 @@ class EnvLogger(Logger):
             val_log (None): Unused, but required by the Logger interface
         """
 
-        # calculate skill accuracy
-        if train_log is not None:
-            # extract a single monitor prediction tensor
-            mon = torch.cat([
-                train_log[0][t][1].view(-1, train_log[0][t][1].shape[-1])
-                for t in range(len(train_log[0]))
-            ], dim=0)
-            # extract a single target skill tensor
-            k = torch.cat([
-                train_log[1][t][3].view(-1)
-                for t in range(len(train_log[1]))
-            ], dim=0)
-            # calculate prediction accuracy
-            acc = (torch.argmax(mon, dim=-1) == k).float().mean().item()
-
-        # during init call, we just use an average
-        else:
-            acc = 1 / N_SKILLS
-
         # deterministically evaluate the model's average reward
         curr_r = self.env.evaluate(self.eval_iters)
 
+        if train_log is not None:
+            corr = 0
+            tot = 0
+            for i in range(len(train_log[0])):
+                corr += (train_log[0][i][3].argmax(dim=-1) == torch.arange(0, train_log[0][i][3].shape[0], dtype=torch.long).to(train_log[0][i][3].device)).float().sum()
+                tot += train_log[0][i][3].shape[0]
+            acc = (corr / tot).item()
+        else:
+            acc = 1/BATCH_SIZE
+
         # save metrics
-        self.accs.append(acc)
         self.avg_rewards.append(curr_r)
-        
+        self.accs.append(acc)
+
         # append metrics to csv file
-        with open(self.log_loc, 'a') as csvfile:
-            spamwriter = csv.writer(csvfile, delimiter=',', lineterminator='\n')
-            spamwriter.writerow([len(self.avg_rewards)-2, curr_r, acc]) # -2 because of init call
+        try:
+            with open(self.log_loc, 'a') as csvfile:
+                spamwriter = csv.writer(csvfile, delimiter=',', lineterminator='\n')
+                spamwriter.writerow([len(self.avg_rewards)-2, curr_r, acc]) # -2 because of init call
+        except:
+            pass
 
         """ Plot the metrics """
         fig, ax = plt.subplots(2)
@@ -592,12 +552,15 @@ class EnvLogger(Logger):
         ax[0].set_title(r"Average Reward")
 
         ax[1].plot(self.accs)
-        ax[1].set_title(r"Skill Accuracy")
+        ax[1].set_title(r"Skill Inversion Accuracy")
 
         fig.set_figwidth(6)
         fig.set_figheight(8)
         plt.tight_layout()
-        plt.savefig(self.graff)
+        try:
+            plt.savefig(self.graff)
+        except:
+            pass
         plt.close(fig)
 
         # save a checkpoint, TODO: add metric instead of overriding every epoch
@@ -616,7 +579,7 @@ def walkerHandler(a):
 def main():
 
     # initialize the model that we will train
-    model = LatentPolicy(CONFIG)
+    model = QuantumPolicy(CONFIG)
     model.to(DEVICE)
 
     # initialize our training environment
@@ -632,15 +595,6 @@ def main():
         #action_handler=walkerHandler
     )
 
-    # env.sample()
-    # s, a, r, k, d = env.data[0]
-    # k = k.unsqueeze(0)
-    # model.setSkill(k)
-    # print(model.forward((s.unsqueeze(0), a.unsqueeze(0), k, d.unsqueeze(0)))[0])
-    # for i in range(s.shape[0]):
-    #     model.policy(s[i:i+1], action_override=a[i:i+1].unsqueeze(1))
-    # exit()
-
     # initialize the logger
     logger = EnvLogger(
         env = env,
@@ -654,7 +608,7 @@ def main():
     logger.log(None, None)
 
     # initialize the loss function object
-    loser = BaseREINFORCE(model.config.state_size, BASE_DIM, BASE_LAYERS, BATCH_SIZE, BASE_LR, DEVICE)
+    loser = BaseREINFORCE(model.config.state_size, BASE_DIM, BASE_LAYERS, BATCH_SIZE, BASE_LR, DEVICE, disable_baseline=(not BASELINE))
 
     # initialize the model's optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
