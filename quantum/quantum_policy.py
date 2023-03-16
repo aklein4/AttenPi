@@ -137,7 +137,7 @@ class QuantumPolicy(nn.Module):
         state_encs = F.normalize(state_encs, p=2, dim=-1)
 
         assert skill_encs.shape == state_encs.shape
-        enc_outs = state_encs @ skill_encs.T
+        enc_outs = (state_encs @ skill_encs.T)[:self.config.batch_keep,:self.config.batch_keep]
 
         states_to_combo = torch.stack([states]*self.config.num_pi, dim=-2)
         assert states_to_combo.shape[:-1] == self.flattenActions(pi_logits).shape[:-1]

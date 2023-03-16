@@ -23,20 +23,20 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LOCAL_VERSION = DEVICE == torch.device("cpu")
 
 # number of concurrent environments
-N_ENVS = 4
+N_ENVS = 1
 # number of passes through all envs to make per epoch
-SHUFFLE_RUNS = 8
+SHUFFLE_RUNS = 16
 
 # model config class
-CONFIG = configs.WalkerPolicy
-ENV_NAME = "BipedalWalker-v3"
+CONFIG = configs.KangarooPolicy
+ENV_NAME = "ALE/Kangaroo-v5"
 
 # length of each skill sequence
 SKILL_LEN = CONFIG.skill_len
 
 # number of evaluation iterations (over all envs)
 EVAL_ITERS = 1
-MAX_BUF_SIZE = 0
+MAX_BUF_SIZE = 512
 
 # csv log output location
 LOG_LOC = "logs/log.csv"
@@ -49,15 +49,15 @@ CHECKPOINT = "local_data/checkpoint.pt"
 # model leaarning rate
 LEARNING_RATE = 1e-4
 # model batch size
-BATCH_SIZE = 16
+BATCH_SIZE = 32
 
 # MDP discount factor
-DISCOUNT = 0.9
+DISCOUNT = 0.99
 # divide rewards by this factor for normalization
 R_NORM = 100
 
-LAMBDA_SKILL = 0.0
-LAMBDA_PI = 1
+LAMBDA_SKILL = 0.01
+LAMBDA_PI = 0.01
 
 # whether to perform evaluation stochastically
 STOCH_EVAL = True
@@ -65,13 +65,13 @@ STOCH_EVAL = True
 BASELINE = True
 
 # baseline hidden layer size
-BASE_DIM = 64
+BASE_DIM = 256
 # baseline number of hidden layers
 BASE_LAYERS = 2
 # baseline learning rate
-BASE_LR = 1e-3
+BASE_LR = 1e-4
 # baseline batch size
-BASE_BATCH = 4
+BASE_BATCH = 8
 
 
 class TrainingEnv:
@@ -101,7 +101,7 @@ class TrainingEnv:
         """
 
         # create environment
-        self.env = gym.vector.make(env_name, num_envs=num_envs, asynchronous=False)
+        self.env = gym.vector.make(env_name, num_envs=num_envs, asynchronous=False, obs_type="ram")
         self.num_envs = num_envs
 
         # store model reference
@@ -132,7 +132,8 @@ class TrainingEnv:
     def shuffle(self):
         """ Sample from the environment and shuffle the data buffer.
         """
-        self.data = []
+        if len(self.data) > 0:
+            self.data = random.choices(self.data, k=min(len(self.data), self.max_buf_size))
         # sample shuffler_runs times
         for i in tqdm(range(self.shuffle_runs), desc="Exploring", leave=False):
             self.sample()
@@ -173,6 +174,9 @@ class TrainingEnv:
 
                 # iterate through the skill sequence
                 for t in range(self.skill_len):
+
+                    if obs.dtype == np.uint8:
+                        obs = obs.astype(np.float32) / 255
 
                     # sample an action using the current state
                     a = self.model.policy(torch.tensor(obs).to(self.device))
@@ -256,6 +260,9 @@ class TrainingEnv:
 
             # do all iterations
             for it in tqdm(range(iterations), desc="Evaluating", leave=False):
+
+                if obs.dtype == np.uint8:
+                        obs = obs.astype(np.float32) / 255
 
                 # reset the environment and get the initial state
                 obs = self.env.reset(seed=0)
@@ -473,7 +480,7 @@ class BaseREINFORCE(nn.Module):
         # skill_logit_targets = torch.argmax(skill_logits, dim=-1)
         # singlet_loss = F.cross_entropy(skill_logits, skill_logit_targets)
         
-        enc_loss = F.cross_entropy(enc_outs, torch.arange(0, batch_size, dtype=torch.long).to(enc_outs.device))
+        enc_loss = F.cross_entropy(enc_outs, torch.arange(0, enc_outs.shape[0], dtype=torch.long).to(enc_outs.device))
 
         pi_mask = torch.diag(torch.ones(pi_preds.shape[1], dtype=torch.bool)).to(pi_preds.device)
         pi_mask = pi_mask.unsqueeze(0).repeat(pi_preds.shape[0], 1, 1)
@@ -583,7 +590,7 @@ class EnvLogger(Logger):
             pi_acc = (corr / tot).item()
 
         else:
-            acc = 1/BATCH_SIZE
+            acc = 1/self.model.config.batch_keep
             skill_max = 1/self.model.config.num_pi
             skill_kl = None
             pi_kl = None
@@ -648,6 +655,8 @@ class EnvLogger(Logger):
 def walkerHandler(a):
     return (a-1).float()
 
+def KangarooHandler(a):
+    return a.bool()
 
 def main():
 
@@ -665,7 +674,7 @@ def main():
         discount = DISCOUNT,
         max_buf_size = MAX_BUF_SIZE,
         device = DEVICE,
-        action_handler=walkerHandler
+        action_handler=KangarooHandler
     )
 
     # initialize the logger
