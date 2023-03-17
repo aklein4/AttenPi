@@ -24,7 +24,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LOCAL_VERSION = True
 
 # number of concurrent environments
-N_ENVS = 4
+N_ENVS = 12
 # number of passes through all envs to make per epoch
 SHUFFLE_RUNS = 1
 
@@ -42,15 +42,15 @@ MAX_BUF_SIZE = 512
 MAX_EPISODE = 1000
 
 # csv log output location
-LOG_LOC = "logs/semisup_regulator.csv"
+LOG_LOC = "logs/baseline.csv"
 # graph output location
-GRAFF = "logs/semisup_regulator.png"
+GRAFF = "logs/baseline.png"
 
 # model checkpoint location
-CHECKPOINT = "local_data/semisup_regulator.pt"
+CHECKPOINT = "local_data/baseline.pt"
 
 # model leaarning rate
-LEARNING_RATE = 3e-4
+LEARNING_RATE = 1e-3
 # model batch size
 BATCH_SIZE = 32
 
@@ -59,12 +59,12 @@ DISCOUNT = 0.98
 # divide rewards by this factor for normalization
 R_NORM = 100
 
-LAMBDA_SKILL = 0.0
+LAMBDA_SKILL = 0
 LAMBDA_PI = 1
-LAMBDA_SEMISUP = 0.1
+LAMBDA_SEMISUP = 0
 
 # whether to perform evaluation stochastically
-STOCH_EVAL = True
+STOCH_EVAL = False
 
 BASELINE = True
 
@@ -212,8 +212,6 @@ class TrainingEnv:
                     # update the done array -> everything done after the first done is masked out
                     curr_dones = np.logical_or(curr_dones, this_done)
 
-                self.pbar.set_postfix({"t": time})
-
                 # get the states and actions from the model's history
                 actions = self.model.action_history.to(self.device) # (num_envs, skill_len, action_size)
                 states = self.model.state_history.to(self.device) # (num_envs, skill_len)
@@ -234,6 +232,8 @@ class TrainingEnv:
                     # store it if it won't be completely masked out
                     if torch.any(torch.logical_not(d)):
                         self.data.append((s, a, r, d))
+
+                self.pbar.set_postfix({"t": time})
 
                 # break if all envs are done, TODO: make this more efficient
                 if np.all(curr_dones):
@@ -257,13 +257,7 @@ class TrainingEnv:
             float: Average reward from trials
         """
 
-        # store a random seed to reinitialize randomness
-        seedo = random.randrange(0xFFFF)
-
         # set all seeds for deterministic evaluation
-        torch.manual_seed(0)
-        np.random.seed(0)
-        random.seed(0)
 
         # accumulate rewards vs number of trials
         tot_rewards = 0
@@ -278,7 +272,7 @@ class TrainingEnv:
             for it in pbar:
 
                 # reset the environment and get the initial state
-                obs = self.env.reset(seed=0)
+                obs = self.env.reset()
                 if LOCAL_VERSION:
                     obs = obs[0]
                 # keep track of which envs are done
@@ -322,9 +316,7 @@ class TrainingEnv:
                         # update the done array -> everything done after the first done is masked out
                         curr_dones = np.logical_or(curr_dones, this_done)
 
-                        
-
-                        pbar.set_postfix({"t": time})
+                    pbar.set_postfix({"t": time})
 
                     # break if all envs are done, TODO: make this more efficient
                     if np.all(curr_dones):
@@ -333,11 +325,6 @@ class TrainingEnv:
                 # store episode in accumulator
                 tot_rewards += np.sum(rewards)
                 tot += self.num_envs
-            
-            # reset all randomness
-            torch.manual_seed(seedo)
-            np.random.seed(seedo)
-            random.seed(seedo)
 
             # return the average reward as float
             pbar.close()
@@ -510,7 +497,7 @@ class BaseREINFORCE(nn.Module):
         pi_mask = torch.diag(torch.ones(pi_preds.shape[1], dtype=torch.bool)).to(pi_preds.device)
         pi_mask = pi_mask.unsqueeze(0).repeat(pi_preds.shape[0], 1, 1)
         pi_probs = torch.log_softmax(pi_preds, -1)[pi_mask]
-        # pi_probs *= torch.softmax(-skill_logits, -1).view(-1).detach()
+        # pi_probs *= torch.softmax(skill_logits, -1).view(-1).detach()
         pi_loss = -torch.mean(pi_probs)
 
         skill_target = torch.argmax(skill_logits, dim=-1)
@@ -688,9 +675,13 @@ def KangarooHandler(a):
 
 def main():
 
+    torch.manual_seed(0)
+    np.random.seed(0)
+    random.seed(0)
+
     # initialize the model that we will train
     model = QuantumPolicy(CONFIG)
-    model.load_state_dict(torch.load(INIT_MODEL))
+    # model.load_state_dict(torch.load(INIT_MODEL))
     model.to(DEVICE)
 
     # initialize our training environment

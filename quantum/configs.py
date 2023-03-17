@@ -41,9 +41,9 @@ CheetahPolicy = Config(
     action_dim = 6,
     action_size = 5,
 
-    num_pi = 4,
+    num_pi = 1,
     skill_len = 8,
-    diff_delta = True,
+    diff_delta = False,
     diff_pi = False,
 
     delta_dim = 32,
