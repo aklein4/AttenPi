@@ -374,7 +374,7 @@ class BaseREINFORCE(nn.Module):
         pi_loss = -torch.mean(pi_chosen)
 
         skill_multed = torch.log_softmax(skill_logits, dim=-1) * A
-        skill_chosen = pi_multed.view(-1, skill_multed.shape[-1])[range(a.numel()),a.view(-1)]
+        skill_chosen = skill_multed.view(-1, skill_multed.shape[-1])[range(a.numel()),a.view(-1)]
         skill_loss = -torch.mean(skill_chosen)
         
         enc_loss = F.cross_entropy(enc_logits, torch.arange(0, enc_logits.shape[0], dtype=torch.long).to(enc_logits.device))
