@@ -33,11 +33,11 @@ CONFIG = configs.DefaultQuantumPolicy
 ENV_NAME = "coinrun"
 
 # number of concurrent environments
-N_ENVS = 16
+N_ENVS = 8
 # number of passes through all envs to make per epoch
 SHUFFLE_RUNS = 1
 MAX_BUF_SIZE = 1024
-MAX_EPISODE = 126
+MAX_EPISODE = 127
 
 # length of each skill sequence
 SKILL_LEN = CONFIG.skill_len
@@ -63,9 +63,9 @@ BASE_DIM = CONFIG.hidden_dim
 # baseline number of hidden layers
 BASE_LAYERS = CONFIG.num_layers
 # baseline learning rate
-BASE_LR = 1e-4
+BASE_LR = 1e-5
 # baseline batch size
-BASE_BATCH = BATCH_SIZE//4
+BASE_BATCH = BATCH_SIZE
 
 
 class Environment:

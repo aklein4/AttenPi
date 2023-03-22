@@ -127,7 +127,7 @@ class QuantumPolicy(nn.Module):
         state_encs = F.normalize(state_encs, p=1, dim=-1)
 
         assert skill_encs.shape == state_encs.shape
-        enc_outs = 5*(state_encs @ skill_encs.T[:self.config.batch_keep,:self.config.batch_keep] - 1)
+        enc_outs = 5*((state_encs @ skill_encs.T)[:self.config.batch_keep,:self.config.batch_keep] - 1)
 
         return pi_policy, skill_policy, enc_outs, skill_logits
 
