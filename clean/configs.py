@@ -6,28 +6,23 @@ class Config(dict):
 
 
 DefaultQuantumPolicy = Config(
-    temp = 1,
+    pred_temp = 0.25,
+    grad_temp = 1,
+    diff_delta = True,
 
-    state_size = 4,
+    state_size = 64,
     action_dim = 1,
-    action_size = 2,
+    action_size = 15,
 
-    num_pi = 3,
+    num_pi = 4,
     skill_len = 8,
-    diff_pi = False,
 
-    delta_dim = 16,
-    delta_layers = 2,
-    delta_dropout = 0.1,
+    hidden_dim = 64,
+    num_layers = 4,
+    dropout = 0.1,
+    latent_dim = 16,
 
-    pi_dim = 16,
-    pi_layers = 2,
-    pi_dropout = 0.1,
-
-    latent_dim = 4,
-    encoder_dim = 16,
-    encoder_layers = 2,
-    encoder_dropout = 0.1
+    batch_keep = 4
 )
 
 

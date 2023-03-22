@@ -66,6 +66,7 @@ class SkipNet(nn.Module):
         return self.out_layer(torch.cat([h, prev], dim=-1))
 
 
+MOBILE_PRETRAINED = "./local_data/pre-conv.pt"
 class MobileNet(nn.Module):
     def __init__(self, out_features, load=None):
         super().__init__()

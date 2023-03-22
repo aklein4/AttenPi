@@ -3,12 +3,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import gym
-# from stable_baselines3 import PPO
+from procgen import ProcgenGym3Env
 
 from quantum_policy import QuantumPolicy
 from train_utils import train, Logger
-from model_utils import SkipNet
+from model_utils import SkipNet, MobileNet
 import configs
 
 from tqdm import tqdm
@@ -17,61 +16,52 @@ import random
 import csv
 import matplotlib.pyplot as plt
 
-INIT_MODEL = "./local_data/cheetah_init.pt"
 
 # device to use for model
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-LOCAL_VERSION = True
 
-# number of concurrent environments
-N_ENVS = 12
-# number of passes through all envs to make per epoch
-SHUFFLE_RUNS = 1
-
-# model config class
-CONFIG = configs.CheetahPolicy
-ENV_NAME = "HalfCheetah-v4"
-
-# length of each skill sequence
-SKILL_LEN = CONFIG.skill_len
-
-# number of evaluation iterations (over all envs)
-EVAL_ITERS = 1
-MAX_BUF_SIZE = 512
-
-MAX_EPISODE = 1000
+# model checkpoint location
+CHECKPOINT = "local_data/baseline.pt"
 
 # csv log output location
 LOG_LOC = "logs/baseline.csv"
 # graph output location
 GRAFF = "logs/baseline.png"
 
-# model checkpoint location
-CHECKPOINT = "local_data/baseline.pt"
+# model config class
+CONFIG = configs.DefaultQuantumPolicy
+ENV_NAME = "coinrun"
+
+# number of concurrent environments
+N_ENVS = 2
+# number of passes through all envs to make per epoch
+SHUFFLE_RUNS = 1
+MAX_BUF_SIZE = 0
+MAX_EPISODE = 10
+
+# length of each skill sequence
+SKILL_LEN = CONFIG.skill_len
+
+# MDP discount factor
+DISCOUNT = 0.98
+# divide rewards by this factor for normalization
+R_NORM = 10
+
+LAMBDA_SKILL = 1
+LAMBDA_ENC = 1
+LAMBDA_SEMISUP = 0
 
 # model leaarning rate
 LEARNING_RATE = 1e-3
 # model batch size
 BATCH_SIZE = 32
 
-# MDP discount factor
-DISCOUNT = 0.98
-# divide rewards by this factor for normalization
-R_NORM = 100
-
-LAMBDA_SKILL = 0
-LAMBDA_PI = 1
-LAMBDA_SEMISUP = 0
-
-# whether to perform evaluation stochastically
-STOCH_EVAL = False
-
 BASELINE = True
 
 # baseline hidden layer size
-BASE_DIM = 32
+BASE_DIM = CONFIG.hidden_dim
 # baseline number of hidden layers
-BASE_LAYERS = 2
+BASE_LAYERS = CONFIG.num_layers
 # baseline learning rate
 BASE_LR = 1e-3
 # baseline batch size
@@ -85,6 +75,8 @@ class Environment:
             num_envs,
             model,
             skill_len,
+            shuffle_runs=1,
+            max_buf_size=0,
             discount=1,
             device=DEVICE,
             action_handler=(lambda x: x)
@@ -100,7 +92,7 @@ class Environment:
         """
 
         # create environment
-        self.env = gym.vector.make(env_name, num_envs=num_envs, asynchronous=False)
+        self.env = env = ProcgenGym3Env(num=num_envs, env_name=env_name, use_backgrounds=False, restrict_themes=True, use_monochrome_assets=True)
         self.num_envs = num_envs
 
         # store model reference
@@ -120,25 +112,30 @@ class Environment:
         # temporal length in each tuple should be skill_len
         self.data = []
 
-        # info related to the env/model
-        self.action_size = model.config.action_size
-        self.state_size = model.config.state_size
-
         # suffle outgoing indices during __getitem__
         self.shuffler = []
+
+        self.recent_rewards = 0
 
 
     def shuffle(self):
         """ Sample from the environment and shuffle the data buffer.
         """
-        if len(self.data) > 0:
+        if len(self.data) > 0 and self.max_buf_size > 0:
             self.data = random.choices(self.data, k=min(len(self.data), self.max_buf_size))
+        else:
+            self.data = []
+
         # sample shuffler_runs times
         self.pbar = tqdm(range(self.shuffle_runs), desc="Exploring", leave=False)
+
         for _ in self.pbar:
             self.sample()
+
         self.pbar.close()
         self.pbar = None
+
+        self.recent_rewards /= self.shuffle_runs * self.num_envs
 
         # shuffle shuffler
         self.shuffler = list(range(len(self.data)))
@@ -150,14 +147,15 @@ class Environment:
         discarding the oldest tuples if the buffer is full.
         """
 
-        # reset the environment and get the initial state
-        obs = self.env.reset()
-        if LOCAL_VERSION:
-            obs = obs[0]
         # keep track of which envs are done
-        curr_dones = np.zeros((self.num_envs,), dtype=bool)
+        dones = np.zeros((self.num_envs,), dtype=bool)
         # hold previous rewards as references for return calculation
         prev_rewards = []
+
+        prev_states = []
+        temp_obs = self.env.observe()
+        for i in range(3):
+            prev_states.append(torch.tensor(temp_obs[1]['rgb']).permute(0, 3, 1, 2).to(DEVICE).float())
 
         # torch setup
         with torch.no_grad():
@@ -167,71 +165,46 @@ class Environment:
             # run until all envs are done
             while True:
 
-                if obs.dtype == np.uint8:
-                    obs = obs.astype(np.float32) / 255
+                seed_state = torch.cat(prev_states, dim=1)
 
                 # get the chosen skill and set it in the model
-                skill = self.model.setChooseSkill(torch.tensor(obs).to(self.device).float())
-
-                # get the skill's reward sequence
-                rewards = []
-                # get the skill's done sequence
-                dones = []
+                self.model.setChooseSkill(seed_state)
 
                 # iterate through the skill sequence
                 for t in range(self.skill_len):
                     time += 1
 
-                    if obs.dtype == np.uint8:
-                        obs = obs.astype(np.float32) / 255
+                    obs = torch.cat(prev_states, dim=1)
 
                     # sample an action using the current state
-                    a = self.model.policy(torch.tensor(obs).to(self.device).float())
-
-                    # this item in the sequence is done if the _previous state_ was done
-                    dones.append(torch.tensor(curr_dones))
+                    a = self.model.policy(obs)
 
                     # take a step in the environment, caching done to temp variable
-                    out = self.env.step(self.action_handler(a).detach().cpu().numpy())
-                    if LOCAL_VERSION:
-                        out = out[:-1]
-                    obs, r, this_done, info = out
-                    this_done |= time >= MAX_EPISODE
-                    # normalize reward
+                    self.env.act(a.squeeze().cpu().detach().numpy())
+
+                    out = self.env.observe()
+
+                    r, new_obs, curr_dones = out
+                    new_obs = new_obs['rgb']
+                    curr_dones |= time >= MAX_EPISODE
                     r /= R_NORM
 
-                    # store the reward to the sequence
-                    rewards.append(torch.tensor(r).to(self.device))
-                    # if we were done before this action, the reward doesn't count
-                    rewards[-1][curr_dones] = 0
-                    # update the done array -> everything done after the first done is masked out
-                    curr_dones = np.logical_or(curr_dones, this_done)
+                    r = torch.tensor(r).to(self.device)
+                    r[dones] = 0
+                    prev_rewards.append(r)
 
-                # get the states and actions from the model's history
-                actions = self.model.action_history.to(self.device) # (num_envs, skill_len, action_size)
-                states = self.model.state_history.to(self.device) # (num_envs, skill_len)
+                    for i in range(self.num_envs):
+                        if not dones[i]:
+                            self.data.append(((obs[i], seed_state[i]), (a[i], r[i])))
 
-                # stack the rewards, and store a reference (sorted temporally)
-                rewards = torch.stack(rewards) # (skill_len, num_envs)
-                for i in range(rewards.shape[0]):
-                    prev_rewards.append(rewards[i])
+                    prev_states.pop(0)
+                    prev_states.append(torch.tensor(new_obs).permute(0, 3, 1, 2).to(DEVICE).float())
 
-                # stack dones into tensor
-                dones = torch.stack(dones).to(self.device) # (skill_len, num_envs)
+                    dones = np.logical_or(curr_dones, dones)
 
-                # iterate over the batch
-                for i in range(self.num_envs):
-                    # get the tuple from each env
-                    s, a, r, d = states[i], actions[i], rewards[:,i], dones[:,i]
+                    self.pbar.set_postfix({"t": time, "done": float(dones.sum())/self.num_envs})
 
-                    # store it if it won't be completely masked out
-                    if torch.any(torch.logical_not(d)):
-                        self.data.append((s, a, r, d))
-
-                self.pbar.set_postfix({"t": time})
-
-                # break if all envs are done, TODO: make this more efficient
-                if np.all(curr_dones):
+                if dones.all():
                     break
 
             # propogate rewards backwards through time to replace referenced rewards with returns
@@ -239,91 +212,9 @@ class Environment:
                 # dones are accounted for by having r=0
                 prev_rewards[-tau] += self.discount * prev_rewards[-tau+1]
 
+        self.recent_rewards += prev_rewards[0].sum().item()
+
         return
-    
-
-    def evaluate(self, iterations=1):
-        """ Calculate the average reward achieved over a series of deterministic episodes.
-
-        Args:
-            iterations (int, optional): Number of times to iterate over all envs (wasted if not STOCH_EVAL). Defaults to 1.
-
-        Returns:
-            float: Average reward from trials
-        """
-
-        # set all seeds for deterministic evaluation
-
-        # accumulate rewards vs number of trials
-        tot_rewards = 0
-        tot = 0
-
-        # torch setup
-        with torch.no_grad():
-            self.model.eval()
-
-            # do all iterations
-            pbar = tqdm(range(iterations), desc="Evaluating", leave=False)
-            for it in pbar:
-
-                # reset the environment and get the initial state
-                obs = self.env.reset()
-                if LOCAL_VERSION:
-                    obs = obs[0]
-                # keep track of which envs are done
-                curr_dones = np.zeros((self.num_envs,), dtype=bool)
-                # hold rewards (each new reward is added)
-                rewards = np.zeros((self.num_envs,), dtype=float)
-
-                time = -1
-
-                # run until all envs are done
-                while True:
-
-                    if obs.dtype == np.uint8:
-                        obs = obs.astype(np.float32) / 255
-        
-                    # get the chosen skill and set it in the model
-                    self.model.setChooseSkill(torch.tensor(obs).to(self.device).float())
-
-                    # iterate through the skill sequence
-                    for t in range(self.skill_len):
-                        time += 1
-
-                        if obs.dtype == np.uint8:
-                            obs = obs.astype(np.float32) / 255
-
-                        # sample an action using the current state, greedy if not STOCH_EVAL
-                        a = self.model.policy(torch.tensor(obs).to(self.device).float(), stochastic=STOCH_EVAL)
-
-                        # take a step in the environment, caching done to temp variable
-                        out = self.env.step(self.action_handler(a).detach().cpu().numpy())
-                        if LOCAL_VERSION:
-                            out = out[:-1]
-                        obs, r, this_done, info = out
-                        this_done |= time >= MAX_EPISODE
-                        # normalize reward
-                        r /= R_NORM
-
-                        # add new rewards, masked by done _before_ this action
-                        rewards[np.logical_not(curr_dones)] += r[np.logical_not(curr_dones)]
-
-                        # update the done array -> everything done after the first done is masked out
-                        curr_dones = np.logical_or(curr_dones, this_done)
-
-                    pbar.set_postfix({"t": time})
-
-                    # break if all envs are done, TODO: make this more efficient
-                    if np.all(curr_dones):
-                        break
-                
-                # store episode in accumulator
-                tot_rewards += np.sum(rewards)
-                tot += self.num_envs
-
-            # return the average reward as float
-            pbar.close()
-            return (tot_rewards / tot).item()
 
 
     def __len__(self):
@@ -350,20 +241,22 @@ class Environment:
         indices = self.shuffler[index:index+batchsize]
         
         # accumulate the data tuples into batch lists
-        accum = ([], [], [], [])
+        x = ([], [])
+        y = ([], [], [])
+
         for i in indices:
-            s, a, r, d = self.data[i]
+            s, s_ = self.data[i][0]
+            a, r = self.data[i][1]
 
             # maintain order in tuples
-            accum[0].append(s)
-            accum[1].append(a)
-            accum[2].append(r)
-            accum[3].append(d)
+            x[0].append(s)
+            x[1].append(s_)
 
-        # stack into tensors
-        accum = [torch.stack(accum[i]) for i in range(len(accum))]
+            y[0].append(s)
+            y[1].append(a)
+            y[2].append(r)
 
-        return (accum[0], accum[3]), accum
+        return tuple(torch.stack(x[i]) for i in range(len(x))), tuple(torch.stack(y[i]) for i in range(len(y)))
 
 
 class BaseREINFORCE(nn.Module):
@@ -383,7 +276,10 @@ class BaseREINFORCE(nn.Module):
         super().__init__()
         
         # create a basic feedforward model for the baseline
-        self.baseline = SkipNet(state_size, h_dim, 1, n_layers, dropout=0.1)
+        self.baseline = nn.Sequential(
+            MobileNet(state_size),
+            SkipNet(state_size, h_dim, 1, n_layers, dropout=0.1)
+        )
         self.baseline = self.baseline.to(device)
 
         # create an optimizer to train the baseline
@@ -408,18 +304,13 @@ class BaseREINFORCE(nn.Module):
         # set to training mode
         self.train()
 
-        # vectorize the data
-        assert x.shape[:-1] == y.shape
-        x = x.reshape(-1, x.shape[-1])
-        y = y.reshape(-1)
-
         # iterate over batches
         for b in range(0, x.shape[0], self.batch_size):
             x_b, y_b = x[b:b+self.batch_size], y[b:b+self.batch_size]
 
             # calculate loss and perform backprop
-            y_hat = self.baseline(x_b).squeeze(-1)
-            loss = F.mse_loss(y_hat.float(), y_b.float())
+            y_hat = self.baseline(x_b)
+            loss = F.mse_loss(y_hat.view(-1).float(), y_b.view(-1).float())
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -437,7 +328,7 @@ class BaseREINFORCE(nn.Module):
         """
         # use zero if we are not using baseline
         if self.disable_baseline:
-            return torch.zeros_like(x[..., :1])
+            return torch.zeros_like((x.shape[0], 1))
 
         # set to eval mode
         self.eval()
@@ -462,12 +353,8 @@ class BaseREINFORCE(nn.Module):
             torch.tensor: Combined loss of the model
         """
 
-        # (b, t, pi, a_d, a_s), (b, pi), (b, t, a_d, a_s), (b, b)
-        pi_logits, skill_logits, logits, enc_outs, pi_preds = pred
-        # (b, t, s), (b, t, s_d), (b, t), (b, t)
-        s, a, r, d = y
-
-        batch_size = s.shape[0]
+        pi_logits, skill_logits, enc_logits, skill_outs = pred
+        s, a, r = y
 
         # get the baseline prediction, squeeze to match r
         base = self.predict_baseline(s).squeeze(-1)
@@ -480,29 +367,26 @@ class BaseREINFORCE(nn.Module):
         A = r - base.detach()
         # unsqueeze to broadcast with pred_opt
         A = A.unsqueeze(-1).unsqueeze(-1)
-        assert A.dim() == logits.dim()
+        assert A.dim() == pi_logits.dim()
 
-        multed = torch.log_softmax(logits, dim=-1) * A
-        chosen = multed.view(-1, multed.shape[-1])[range(a.numel()),a.view(-1)]
-        masked = chosen[torch.logical_not(d).view(-1).repeat_interleave(a.shape[-1])]
-        loss = -torch.mean(masked)
+        pi_multed = torch.log_softmax(pi_logits, dim=-1) * A
+        pi_chosen = pi_multed.view(-1, pi_multed.shape[-1])[range(a.numel()),a.view(-1)]
+        pi_loss = -torch.mean(pi_chosen)
+
+        skill_multed = torch.log_softmax(skill_logits, dim=-1) * A
+        skill_chosen = pi_multed.view(-1, skill_multed.shape[-1])[range(a.numel()),a.view(-1)]
+        skill_loss = -torch.mean(skill_chosen)
         
-        enc_loss = F.cross_entropy(enc_outs, torch.arange(0, enc_outs.shape[0], dtype=torch.long).to(enc_outs.device))
+        enc_loss = F.cross_entropy(enc_logits, torch.arange(0, enc_logits.shape[0], dtype=torch.long).to(enc_logits.device))
 
-        pi_mask = torch.diag(torch.ones(pi_preds.shape[1], dtype=torch.bool)).to(pi_preds.device)
-        pi_mask = pi_mask.unsqueeze(0).repeat(pi_preds.shape[0], 1, 1)
-        pi_probs = torch.log_softmax(pi_preds, -1)[pi_mask]
-        # pi_probs *= torch.softmax(skill_logits, -1).view(-1).detach()
-        pi_loss = -torch.mean(pi_probs)
+        skill_target = torch.argmax(skill_outs, dim=-1)
+        semisup_loss = F.cross_entropy(skill_outs, skill_target)
 
-        skill_target = torch.argmax(skill_logits, dim=-1)
-        semisup_loss = F.cross_entropy(skill_logits, skill_target)
-
-        return loss + (LAMBDA_SKILL * enc_loss) + (LAMBDA_PI * pi_loss) + (LAMBDA_SEMISUP * semisup_loss)
+        return pi_loss + (LAMBDA_SKILL * skill_loss) + (LAMBDA_ENC * enc_loss) + (LAMBDA_SEMISUP * semisup_loss)
 
 
 class EnvLogger(Logger):
-    def __init__(self, env, eval_iters, log_loc, graff):
+    def __init__(self, env, log_loc, graff):
         """ A logger to track the performance of the model in the environment.
 
         Args:
@@ -520,19 +404,16 @@ class EnvLogger(Logger):
         self.enc_accs = []
         self.skill_maxs = []
         self.skill_kls = []
-        self.pi_kls = []
-        self.pi_accs = []
 
         # basic parameters
         self.log_loc = log_loc
         self.graff = graff
-        self.eval_iters = eval_iters
 
         # create metric file and write header
         try:
             with open(self.log_loc, 'w') as csvfile:
                 spamwriter = csv.writer(csvfile, dialect='excel')
-                spamwriter.writerow(["epoch", "avg_reward", "skill_max", "enc_acc", "skill_kl", "pi_acc", "pi_kl"])
+                spamwriter.writerow(["epoch", "avg_reward", "skill_max", "enc_acc", "skill_kl"])
         except:
             pass
 
@@ -551,60 +432,45 @@ class EnvLogger(Logger):
         """
 
         # deterministically evaluate the model's average reward
-        curr_r = self.env.evaluate(self.eval_iters)
+        curr_r = self.env.recent_rewards
 
         if train_log is not None:
+            preds = train_log[0]
+
+            # get decoder accuracy
             corr = 0
             tot = 0
-            for i in range(len(train_log[0])):
-                corr += (torch.argmax(train_log[0][i][3], dim=-1) == torch.arange(0, train_log[0][i][3].shape[0], dtype=torch.long).to(train_log[0][i][3].device)).sum()
-                tot += train_log[0][i][3].shape[0]
+            for i in range(len(preds)):
+                corr += (torch.argmax(preds[i][2], dim=-1) == torch.arange(0, preds[i][2].shape[0], dtype=torch.long).to(preds[i][2].device)).sum()
+                tot += preds[i][2].shape[0]
             acc = (corr / tot).item()
 
+            # get skill max
             p = 0
             tot = 0
-            for i in range(len(train_log[0])):
-                p += torch.softmax(train_log[0][i][1], dim=-1).max(dim=-1)[0].sum()
-                tot += train_log[0][i][1].shape[0]
+            for i in range(len(preds)):
+                p += torch.softmax(preds[i][3], dim=-1).max(dim=-1)[0].sum()
+                tot += preds[i][3].shape[0]
             skill_max = (p / tot).item()
 
-            avg_skill = torch.zeros_like(train_log[0][0][1][0])
+            # get skill kl
+            avg_skill = torch.zeros_like(preds[0][3][0])
             tot = 0
-            for i in range(len(train_log[0])):
-                avg_skill += torch.sum(torch.softmax(train_log[0][i][1], dim=-1), dim=0)
-                tot += train_log[0][i][1].shape[0]
+            for i in range(len(preds)):
+                avg_skill += torch.sum(torch.softmax(preds[i][3], dim=-1), dim=0)
+                tot += preds[i][3].shape[0]
             avg_skill /= tot
             kl = 0
             tot = 0
-            for i in range(len(train_log[0])):
-                kl += F.kl_div(torch.log_softmax(train_log[0][i][1], dim=-1), avg_skill.unsqueeze(0), reduction='sum')
-                tot += train_log[0][i][1].shape[0]
+            for i in range(len(preds)):
+                kl += F.kl_div(torch.log_softmax(preds[i][3], dim=-1), avg_skill.unsqueeze(0), reduction='sum')
+                tot += preds[i][3].shape[0]
             skill_kl = (kl / tot).item()
-
-            kl = 0
-            tot = 0
-            for i in range(len(train_log[0])):
-                avg_pi = torch.mean(torch.softmax(train_log[0][i][0], dim=-1), dim=-3)
-                avg_pi = torch.stack([avg_pi]*train_log[0][i][0].shape[-3], dim=-3)
-                kl += F.kl_div(torch.log_softmax(train_log[0][i][0], dim=-1), avg_pi, reduction='sum')
-                tot += train_log[0][i][0].shape[0]*train_log[0][i][0].shape[1]*train_log[0][i][0].shape[2]
-            pi_kl = (kl / tot).item()
-
-            corr = 0
-            tot = 0
-            for i in range(len(train_log[0])):
-                pi_targ = torch.arange(0, train_log[0][i][4].shape[1], dtype=torch.long).to(train_log[0][i][4].device)
-                pi_targ = torch.stack([pi_targ]*train_log[0][i][4].shape[0], dim=0)
-                corr += (torch.argmax(train_log[0][i][4], dim=-1) == pi_targ).sum()
-                tot += train_log[0][i][4].shape[0]*train_log[0][i][4].shape[1]
-            pi_acc = (corr / tot).item()
 
         else:
             acc = 1/self.model.config.batch_keep
             skill_max = 1/self.model.config.num_pi
             skill_kl = None
-            pi_kl = None
-            pi_acc = 1/self.model.config.num_pi
 
 
         # save metrics
@@ -612,19 +478,17 @@ class EnvLogger(Logger):
         self.enc_accs.append(acc)
         self.skill_maxs.append(skill_max)
         self.skill_kls.append(skill_kl)
-        self.pi_kls.append(pi_kl)
-        self.pi_accs.append(pi_acc)
 
         # append metrics to csv file
         try:
             with open(self.log_loc, 'a') as csvfile:
                 spamwriter = csv.writer(csvfile, delimiter=',', lineterminator='\n')
-                spamwriter.writerow([len(self.avg_rewards)-2, curr_r, skill_max, acc, skill_kl, pi_acc, pi_kl]) # -2 because of init call
+                spamwriter.writerow([len(self.avg_rewards)-2, curr_r, skill_max, acc, skill_kl]) # -2 because of init call
         except:
             pass
 
         """ Plot the metrics """
-        fig, ax = plt.subplots(3, 2)
+        fig, ax = plt.subplots(2, 2)
 
         ax[0,0].plot(self.avg_rewards)
         ax[0,0].set_title(r"Average Reward")
@@ -635,17 +499,11 @@ class EnvLogger(Logger):
         ax[0,1].plot(self.skill_maxs)
         ax[0,1].set_title(r"Avg Max Choice")
 
-        ax[2,0].plot(self.skill_kls)
-        ax[2,0].set_title(r"Batch-wise Choice Information Radius")
-
-        ax[2,1].plot(self.pi_kls)
-        ax[2,1].set_title(r"Inter-Policy Information Radius")
-
-        ax[1,1].plot(self.pi_accs)
-        ax[1,1].set_title(r"Policy Identification Accuracy")
+        ax[1,1].plot(self.skill_kls)
+        ax[1,1].set_title(r"Epoch-wise Choice Information Radius")
 
         fig.set_figwidth(12)
-        fig.set_figheight(12)
+        fig.set_figheight(8)
         plt.tight_layout()
         try:
             plt.savefig(self.graff)
@@ -662,12 +520,6 @@ class EnvLogger(Logger):
         torch.save(self.model.state_dict(), CHECKPOINT)
 
 
-def CheetahHandler(a):
-    return (a-2).float() / 2.0
-
-def KangarooHandler(a):
-    return a.int()
-
 def main():
 
     torch.manual_seed(0)
@@ -680,7 +532,7 @@ def main():
     model.to(DEVICE)
 
     # initialize our training environment
-    env = TrainingEnv(
+    env = Environment(
         env_name = ENV_NAME,
         num_envs = N_ENVS,
         model = model,
@@ -688,20 +540,18 @@ def main():
         shuffle_runs = SHUFFLE_RUNS,
         discount = DISCOUNT,
         max_buf_size = MAX_BUF_SIZE,
-        device = DEVICE,
-        action_handler=CheetahHandler
     )
 
     # initialize the logger
     logger = EnvLogger(
         env = env,
-        eval_iters = EVAL_ITERS,
         log_loc = LOG_LOC,
         graff = GRAFF
     )
     logger.initialize(model)
 
     # make an init call to the logger to save the before-training performance
+    env.shuffle()
     logger.log(None, None)
 
     # initialize the loss function object
