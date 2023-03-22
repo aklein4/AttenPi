@@ -58,6 +58,8 @@ BATCH_SIZE = 64
 
 BASELINE = True
 
+RECENT_DECAY = 0.8
+
 # baseline hidden layer size
 BASE_DIM = CONFIG.hidden_dim
 # baseline number of hidden layers
@@ -79,7 +81,8 @@ class Environment:
             max_buf_size=0,
             discount=1,
             device=DEVICE,
-            action_handler=(lambda x: x)
+            action_handler=(lambda x: x),
+            recent_decay=RECENT_DECAY
         ):
         """Handles the environment and data collection for reinforcement training.
 
@@ -104,6 +107,7 @@ class Environment:
         self.shuffle_runs = shuffle_runs
         self.max_buf_size = max_buf_size
         self.action_handler = action_handler
+        self.recent_decay = recent_decay
 
         # device to store everything on
         self.device = device
@@ -116,6 +120,7 @@ class Environment:
         self.shuffler = []
 
         self.recent_rewards = 0
+        self.recent_div = 0
 
 
     def shuffle(self):
@@ -126,6 +131,10 @@ class Environment:
         else:
             self.data = []
 
+        self.recent_rewards *= self.recent_decay
+        self.recent_div *= self.recent_decay
+        self.recent_div += 1
+
         # sample shuffler_runs times
         self.pbar = tqdm(range(self.shuffle_runs), desc="Exploring", leave=False)
 
@@ -134,8 +143,6 @@ class Environment:
 
         self.pbar.close()
         self.pbar = None
-
-        self.recent_rewards /= self.shuffle_runs * self.num_envs
 
         # shuffle shuffler
         self.shuffler = list(range(len(self.data)))
@@ -212,9 +219,13 @@ class Environment:
                 # dones are accounted for by having r=0
                 prev_rewards[-tau] += self.discount * prev_rewards[-tau+1]
 
-        self.recent_rewards += prev_rewards[0].sum().item()
+        self.recent_rewards += prev_rewards[0].sum().item() / (self.shuffle_runs * self.num_envs)
 
         return
+
+
+    def getRecent(self):
+        return self.recent_rewards / self.recent_div
 
 
     def __len__(self):
@@ -433,7 +444,7 @@ class EnvLogger(Logger):
         """
 
         # deterministically evaluate the model's average reward
-        curr_r = self.env.recent_rewards
+        curr_r = self.getRecent()
 
         if train_log is not None:
             preds = train_log[0]
