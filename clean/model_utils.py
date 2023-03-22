@@ -1,6 +1,8 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import torchvision
 
 
 # https://d2l.ai/chapter_attention-mechanisms-and-transformers/self-attention-and-positional-encoding.html
@@ -62,3 +64,19 @@ class SkipNet(nn.Module):
             prev = temp
 
         return self.out_layer(torch.cat([h, prev], dim=-1))
+
+
+class MobileNet(nn.Module):
+    def __init__(self, out_features, load=None):
+        super().__init__()
+
+        self.model = torchvision.models.mobilenet_v2(weights='IMAGENET1K_V1')
+        self.model.features[0][0] = nn.Conv2d(9, 32, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
+
+        self.model.classifier[-1] = nn.Linear(self.model.classifier[-1].in_features, out_features, bias=True)
+
+        if load is not None:
+            self.model.load_state_dict(torch.load(load))
+    
+    def forward(self, x):
+        return self.model(x)
