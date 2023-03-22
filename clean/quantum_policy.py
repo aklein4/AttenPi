@@ -37,22 +37,12 @@ class QuantumPolicy(nn.Module):
 
         self.state_encoder = nn.Sequential(
             MobileNet(self.config.state_size),
-            SkipNet(
-                in_dim = self.config.state_size,
-                h_dim = self.config.hidden_dim,
-                out_dim = self.config.latent_dim,
-                n_layers = self.config.num_layers,
-                dropout = self.config.dropout
-            )
+            nn.Linear(self.config.state_size, self.config.latent_dim),
+            nn.Softmax(dim=-1)
         )
-        self.skill_encoder = SkipNet(
-            in_dim = self.config.num_pi,
-            h_dim = self.config.hidden_dim,
-            out_dim = self.config.latent_dim,
-            n_layers = self.config.num_layers,
-            dropout = self.config.dropout
+        self.skill_encoder = nn.Sequential(
+            nn.Linear(self.config.num_pi, self.config.latent_dim, bias=False)
         )
-
 
     def setSkill(self, skills):
         assert skills.dim() == 2
@@ -130,14 +120,14 @@ class QuantumPolicy(nn.Module):
         if not self.config.diff_delta:
             enc_logits = enc_logits.detach()
 
-        skill_encs = self.skill_encoder(torch.log_softmax(enc_logits, dim=-1))
-        skill_encs = F.normalize(skill_encs, p=2, dim=-1)
+        skill_encs = self.skill_encoder(torch.softmax(enc_logits, dim=-1))
+        skill_encs = F.normalize(skill_encs, p=1, dim=-1)
 
         state_encs = self.state_encoder(states)
-        state_encs = F.normalize(state_encs, p=2, dim=-1)
+        state_encs = F.normalize(state_encs, p=1, dim=-1)
 
         assert skill_encs.shape == state_encs.shape
-        enc_outs = 5*(state_encs @ skill_encs.T)[:self.config.batch_keep,:self.config.batch_keep]
+        enc_outs = 5*(state_encs @ skill_encs.T[:self.config.batch_keep,:self.config.batch_keep] - 1)
 
         return pi_policy, skill_policy, enc_outs, skill_logits
 

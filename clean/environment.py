@@ -48,7 +48,7 @@ DISCOUNT = 0.97
 R_NORM = 1
 
 LAMBDA_SKILL = 1
-LAMBDA_ENC = 0.1
+LAMBDA_ENC = 1
 LAMBDA_SEMISUP = 0
 
 # model leaarning rate
