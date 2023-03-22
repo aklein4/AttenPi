@@ -353,7 +353,7 @@ class BaseREINFORCE(nn.Module):
             torch.tensor: Combined loss of the model
         """
 
-        pi_logits, skill_logits, enc_logits, skill_outs = pred
+        pi_logits, skill_logits, enc_logits, pi_outs, skill_outs = pred
         s, a, r = y
 
         # get the baseline prediction, squeeze to match r
@@ -404,6 +404,7 @@ class EnvLogger(Logger):
         self.enc_accs = []
         self.skill_maxs = []
         self.skill_kls = []
+        self.pi_kls = []
 
         # basic parameters
         self.log_loc = log_loc
@@ -413,7 +414,7 @@ class EnvLogger(Logger):
         try:
             with open(self.log_loc, 'w') as csvfile:
                 spamwriter = csv.writer(csvfile, dialect='excel')
-                spamwriter.writerow(["epoch", "avg_reward", "skill_max", "enc_acc", "skill_kl"])
+                spamwriter.writerow(["epoch", "avg_reward", "skill_max", "enc_acc", "skill_kl", "pi_kl"])
         except:
             pass
 
@@ -454,56 +455,69 @@ class EnvLogger(Logger):
             skill_max = (p / tot).item()
 
             # get skill kl
-            avg_skill = torch.zeros_like(preds[0][3][0])
+            avg_skill = torch.zeros_like(preds[0][4][0])
             tot = 0
             for i in range(len(preds)):
-                avg_skill += torch.sum(torch.softmax(preds[i][3], dim=-1), dim=0)
-                tot += preds[i][3].shape[0]
+                avg_skill += torch.sum(torch.softmax(preds[i][4], dim=-1), dim=0)
+                tot += preds[i][4].shape[0]
             avg_skill /= tot
             kl = 0
             tot = 0
             for i in range(len(preds)):
-                kl += F.kl_div(torch.log_softmax(preds[i][3], dim=-1), avg_skill.unsqueeze(0), reduction='sum')
-                tot += preds[i][3].shape[0]
+                kl += F.kl_div(torch.log_softmax(preds[i][4], dim=-1), avg_skill.unsqueeze(0), reduction='sum')
+                tot += preds[i][4].shape[0]
             skill_kl = (kl / tot).item()
+
+            kl = 0
+            tot = 0
+            for i in range(len(preds)):
+                avg_pi = torch.mean(torch.softmax(preds[i][3], dim=-1), dim=-3)
+                avg_pi = torch.stack([avg_pi]*preds[i][3].shape[-3], dim=-3)
+                kl += F.kl_div(torch.log_softmax(preds[i][3], dim=-1), avg_pi, reduction='sum')
+                tot += preds[i][3].shape[0]*preds[i][3].shape[1]*preds[i][3].shape[2]
+            pi_kl = (kl / tot).item()
 
         else:
             acc = 1/self.model.config.batch_keep
             skill_max = 1/self.model.config.num_pi
             skill_kl = None
-
+            pi_kl = None
 
         # save metrics
         self.avg_rewards.append(curr_r)
         self.enc_accs.append(acc)
         self.skill_maxs.append(skill_max)
         self.skill_kls.append(skill_kl)
+        self.pi_kls.append(pi_kl)
 
         # append metrics to csv file
         try:
             with open(self.log_loc, 'a') as csvfile:
                 spamwriter = csv.writer(csvfile, delimiter=',', lineterminator='\n')
-                spamwriter.writerow([len(self.avg_rewards)-2, curr_r, skill_max, acc, skill_kl]) # -2 because of init call
+                spamwriter.writerow([len(self.avg_rewards)-2, curr_r, skill_max, acc, skill_kl, pi_kl]) # -2 because of init call
         except:
             pass
 
         """ Plot the metrics """
-        fig, ax = plt.subplots(2, 2)
+        fig, ax = plt.subplots(3, 2)
 
         ax[0,0].plot(self.avg_rewards)
         ax[0,0].set_title(r"Average Reward")
 
-        ax[1,0].plot(self.enc_accs)
-        ax[1,0].set_title(r"Choice-State Identification Accuracy")
+        ax[1,1].plot(self.enc_accs)
+        ax[1,1].set_title(r"Choice-State Identification Accuracy")
 
-        ax[0,1].plot(self.skill_maxs)
-        ax[0,1].set_title(r"Avg Max Choice")
+        ax[1,0].plot(self.skill_maxs)
+        ax[1,0].set_title(r"Avg Max Choice")
 
-        ax[1,1].plot(self.skill_kls)
-        ax[1,1].set_title(r"Epoch-wise Choice Information Radius")
+        ax[2,0].plot(self.skill_kls)
+        ax[2,0].set_title(r"Epoch-wise Choice Information Radius")
+
+        ax[2,1].plot(self.pi_kls)
+        ax[2,1].set_title(r"Step-Wise Inter-Policy Information Radius")
 
         fig.set_figwidth(12)
-        fig.set_figheight(8)
+        fig.set_figheight(12)
         plt.tight_layout()
         try:
             plt.savefig(self.graff)

@@ -129,7 +129,7 @@ class QuantumPolicy(nn.Module):
         assert skill_encs.shape == state_encs.shape
         enc_outs = 5*((state_encs @ skill_encs.T)[:self.config.batch_keep,:self.config.batch_keep] - 1)
 
-        return pi_policy, skill_policy, enc_outs, skill_logits
+        return pi_policy, skill_policy, enc_outs, pi_logits, skill_logits
 
 
     def piForward(self, states):
