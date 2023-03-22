@@ -20,7 +20,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 LOCAL_VERSION = True
 
 N_ENVS = 256
-N_PER_ENV = 64
+N_PER_ENV = 16
 
 CHANGE_PROB = 0.25
 
@@ -117,6 +117,7 @@ def main():
 
     # initialize the model that we will train
     model = MobileNet(64)
+    model = model.to(DEVICE)
 
     # initialize our training environment
     env = Sampler(
@@ -135,8 +136,11 @@ def main():
         optimizer = optimizer,
         train_data = env,
         loss_fn = loser,
-        batch_size = BATCH_SIZE
+        batch_size = BATCH_SIZE,
+        num_epochs=16
     )
+
+    torch.save(model.state_dict(), "local_data/pre-conv.pt")
 
 
 if __name__ == '__main__':

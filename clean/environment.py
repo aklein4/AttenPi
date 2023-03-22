@@ -21,40 +21,40 @@ import matplotlib.pyplot as plt
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # model checkpoint location
-CHECKPOINT = "local_data/baseline.pt"
+CHECKPOINT = "local_data/test.pt"
 
 # csv log output location
-LOG_LOC = "logs/baseline.csv"
+LOG_LOC = "logs/test.csv"
 # graph output location
-GRAFF = "logs/baseline.png"
+GRAFF = "logs/test.png"
 
 # model config class
 CONFIG = configs.DefaultQuantumPolicy
 ENV_NAME = "coinrun"
 
 # number of concurrent environments
-N_ENVS = 2
+N_ENVS = 16
 # number of passes through all envs to make per epoch
 SHUFFLE_RUNS = 1
-MAX_BUF_SIZE = 0
-MAX_EPISODE = 10
+MAX_BUF_SIZE = 1024
+MAX_EPISODE = 126
 
 # length of each skill sequence
 SKILL_LEN = CONFIG.skill_len
 
 # MDP discount factor
-DISCOUNT = 0.98
+DISCOUNT = 0.97
 # divide rewards by this factor for normalization
-R_NORM = 10
+R_NORM = 1
 
 LAMBDA_SKILL = 1
-LAMBDA_ENC = 1
+LAMBDA_ENC = 0.1
 LAMBDA_SEMISUP = 0
 
 # model leaarning rate
-LEARNING_RATE = 1e-3
+LEARNING_RATE = 1e-4
 # model batch size
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 
 BASELINE = True
 
@@ -63,7 +63,7 @@ BASE_DIM = CONFIG.hidden_dim
 # baseline number of hidden layers
 BASE_LAYERS = CONFIG.num_layers
 # baseline learning rate
-BASE_LR = 1e-3
+BASE_LR = 1e-4
 # baseline batch size
 BASE_BATCH = BATCH_SIZE//4
 
@@ -92,7 +92,7 @@ class Environment:
         """
 
         # create environment
-        self.env = env = ProcgenGym3Env(num=num_envs, env_name=env_name, use_backgrounds=False, restrict_themes=True, use_monochrome_assets=True)
+        self.env = env = ProcgenGym3Env(num=num_envs, env_name=env_name, distribution_mode='easy', use_backgrounds=False, restrict_themes=True, use_monochrome_assets=True)
         self.num_envs = num_envs
 
         # store model reference

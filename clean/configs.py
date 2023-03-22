@@ -12,7 +12,7 @@ DefaultQuantumPolicy = Config(
 
     state_size = 64,
     action_dim = 1,
-    action_size = 15,
+    action_size = 9,
 
     num_pi = 4,
     skill_len = 8,
