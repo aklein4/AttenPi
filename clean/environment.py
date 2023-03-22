@@ -450,8 +450,8 @@ class EnvLogger(Logger):
             p = 0
             tot = 0
             for i in range(len(preds)):
-                p += torch.softmax(preds[i][3], dim=-1).max(dim=-1)[0].sum()
-                tot += preds[i][3].shape[0]
+                p += torch.softmax(preds[i][4], dim=-1).max(dim=-1)[0].sum()
+                tot += preds[i][4].shape[0]
             skill_max = (p / tot).item()
 
             # get skill kl
