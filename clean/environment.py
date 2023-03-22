@@ -21,12 +21,12 @@ import matplotlib.pyplot as plt
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # model checkpoint location
-CHECKPOINT = "local_data/test.pt"
+CHECKPOINT = "local_data/no_reg.pt"
 
 # csv log output location
-LOG_LOC = "logs/test.csv"
+LOG_LOC = "logs/no_reg.csv"
 # graph output location
-GRAFF = "logs/test.png"
+GRAFF = "logs/no_reg.png"
 
 # model config class
 CONFIG = configs.DefaultQuantumPolicy
