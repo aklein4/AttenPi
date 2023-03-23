@@ -28,18 +28,13 @@ def getData(version):
             else:
                 try:
                     for i in range(len(row)):
-                        data[header[i]].append(float(row[i])*100)
+                        data[header[i]].append(float(row[i]))
                 except:
                     continue
-
-
+    
     for k in data.keys():
-        while len(data[k]) < len(data["no_reg"]):
-            data[k].append(data[k][-1])
+        data[k] = np.array(data[k][:40])
 
-        data[k] = np.array(data[k])
-
-    print(len(data['all_reg']))
     return data
 
 
@@ -48,7 +43,7 @@ def main():
     data = []
     for v in VERSIONS:
         data.append(getData(v)[TARGET])
-    
+
     data = np.stack(data)
 
     plt.plot(data.T)
@@ -56,12 +51,12 @@ def main():
         'RL Baseline',
         'No Regularization',
         'L_mu Regularization',
-        'L_s Regularization',
+        'L_temp Regularization',
         'All Regularization'
     ])
-    plt.title("Average Greedy Action Reward")
+    plt.title("Rolling Average Discount Episode Return")
     plt.xlabel("Epoch")
-    plt.ylabel("Average Reward (1000 steps)")
+    plt.ylabel("Avg Discounted Return")
     plt.savefig("reward.png")
 
 
