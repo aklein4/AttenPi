@@ -1,4 +1,4 @@
 # AttenPi
 
-<!-- ./attenpi-paper.pdf.pdf:START -->
-<!-- ./attenpi-paper.pdf.pdf:END -->
+<!-- https://github.com/aklein4/AttenPi/blob/master/attenpi-paper.pdf:START -->
+<!-- https://github.com/aklein4/AttenPi/blob/master/attenpi-paper.pdf:END -->
