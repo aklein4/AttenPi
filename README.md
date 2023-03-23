@@ -1,4 +1,4 @@
 # AttenPi
 
-<!-- ./attenpi-paper:START -->
-<!-- ./attenpi-paper:END -->
+<!-- ./attenpi-paper.pdf.pdf:START -->
+<!-- ./attenpi-paper.pdf.pdf:END -->
