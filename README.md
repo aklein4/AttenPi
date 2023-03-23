@@ -1,4 +1,4 @@
 # AttenPi
 
-
-[embed]./attenpi-paper.pdf[/embed]
+<!-- ./attenpi-paper:START -->
+<!-- ./attenpi-paper:END -->
