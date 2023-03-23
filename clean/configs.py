@@ -7,8 +7,8 @@ class Config(dict):
 
 DefaultQuantumPolicy = Config(
     pred_temp = 0.25,
-    grad_temp = 1,
-    diff_delta = False,
+    grad_temp = 0.25,
+    diff_delta = True,
 
     state_size = 64,
     action_dim = 1,

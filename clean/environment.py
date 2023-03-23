@@ -21,12 +21,12 @@ import matplotlib.pyplot as plt
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # model checkpoint location
-CHECKPOINT = "local_data/no_reg.pt"
+CHECKPOINT = "local_data/all_reg.pt"
 
 # csv log output location
-LOG_LOC = "logs/no_reg.csv"
+LOG_LOC = "logs/all_reg.csv"
 # graph output location
-GRAFF = "logs/no_reg.png"
+GRAFF = "logs/all_reg.png"
 
 # model config class
 CONFIG = configs.DefaultQuantumPolicy
@@ -48,7 +48,7 @@ DISCOUNT = 0.97
 R_NORM = 1
 
 LAMBDA_SKILL = 1
-LAMBDA_ENC = 1
+LAMBDA_ENC = 3
 LAMBDA_SEMISUP = 0
 
 # model leaarning rate
@@ -444,7 +444,7 @@ class EnvLogger(Logger):
         """
 
         # deterministically evaluate the model's average reward
-        curr_r = self.getRecent()
+        curr_r = self.env.getRecent()
 
         if train_log is not None:
             preds = train_log[0]
