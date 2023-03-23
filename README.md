@@ -1,4 +1,25 @@
 # AttenPi
 
-<!-- https://github.com/aklein4/AttenPi/blob/master/attenpi-paper.pdf:START -->
-<!-- https://github.com/aklein4/AttenPi/blob/master/attenpi-paper.pdf:END -->
+### An end-to-end differentiable hierarchical reinforcement learning agent based on continuous sub-policy attention.
+
+ - experiments: Folder containing discarded work and expiriments.
+ 
+ - figs: Folder containing plots of training data.
+ 
+ - logs: Folder containing training progress plots and log files.
+
+ - attenpi-paper.pdf: Research paper written for the project.
+ 
+ - configs.py: Model configuration options for QuantumPolicy.
+
+ - model_utils.py: Model subclasses and helper functions.
+ 
+ - plot_data.py: Script to plot data from log files.
+ 
+ - pretrain_cnn.py: Script to pretrain the CNN used for 'coinrun' environment.
+ 
+ - quantum_policy.py: Contains the QuantumPolicy class, which implements the AttenPi algorithm.
+ 
+ - train.py: Environment and script used to train QuantumPolicy
+ 
+ - train_utils: General training script and helper functions.
