@@ -1,14 +1,14 @@
 # AttenPi
 
-### An end-to-end differentiable hierarchical reinforcement learning agent based on continuous sub-policy attention.
+![See project-poster.png](./project-poster.png)
+
+### An end-to-end differentiable hierarchical reinforcement learning agent based on continuous sub-policy attention. (See attenpi-paper.pdf for more details)
 
  - experiments: Folder containing discarded work and expiriments.
  
  - figs: Folder containing plots of training data.
  
  - logs: Folder containing training progress plots and log files.
-
- - attenpi-paper.pdf: Research paper written for the project.
  
  - configs.py: Model configuration options for QuantumPolicy.
 
